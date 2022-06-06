@@ -7,6 +7,9 @@
 #include <linux/ioctl.h>
 #include <stdint.h>
 
+#include "ioctl-map.h"
+#include "structs.h"
+
 static int (*real_ioctl)(int d, unsigned long request, char *argp)=NULL;
 
 #define GPU_FILE "/dev/pvrsrvkm"
@@ -43,8 +46,31 @@ int ioctl(int d, unsigned long request, void *argp) {
     int p = real_ioctl(d, request, argp);
     //this second check is technically not necessary
     if (is_gpu(d) && (_IOC_TYPE(request) == 0x67)) {
-        int callnum = _IOC_NR(request);
-        __android_log_print(ANDROID_LOG_VERBOSE, "PVR: UNKNOWN", "ioctl: type: %x number: %x size: %x", _IOC_TYPE(request), callnum, _IOC_SIZE(request));
+        PVRSRV_BRIDGE_PACKAGE* pack = (PVRSRV_BRIDGE_PACKAGE*)argp;
+        uint32_t io = pack->ui32BridgeID;
+        if (_IOC_NR(request) != _IOC_NR(io)) {
+            __android_log_print(ANDROID_LOG_VERBOSE, "PVR:", "pack and bridge id different");
+            return p;
+        }
+
+        int callnum = _IOC_NR(io);
+        if (callnum < S(ioctl_names1)) {
+            switch (callnum) {
+                case 0x6: {
+                    PVRSRV_BRIDGE_IN_ALLOCDEVICEMEM* sin = (PVRSRV_BRIDGE_IN_ALLOCDEVICEMEM*)pack->pvParamIn;
+                    PVRSRV_BRIDGE_OUT_ALLOCDEVICEMEM* sout = (PVRSRV_BRIDGE_OUT_ALLOCDEVICEMEM*)pack->pvParamOut;
+                    if (sout->eError != PVRSRV_OK) {
+                        __android_log_print(ANDROID_LOG_VERBOSE, "PVR:", "error: %x", sout->eError);
+                    }
+                    __android_log_print(ANDROID_LOG_VERBOSE, "PVR:", "allocating %x bytes of memory %x", sin->uSize, sout->sClientMemInfo.uAllocSize);
+                    break;
+                }
+                default:
+                    __android_log_print(ANDROID_LOG_VERBOSE, "PVR:", "ioctl: type: %x number: %s size: %x", _IOC_TYPE(request), ioctl_names1[callnum], _IOC_SIZE(request));
+            }
+        } else {
+            __android_log_print(ANDROID_LOG_VERBOSE, "PVR: UNKNOWN", "ioctl: type: %x number: %x size: %x", _IOC_TYPE(request), callnum, _IOC_SIZE(request));
+        }
     }
 
     return p;
