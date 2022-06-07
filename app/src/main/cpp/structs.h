@@ -473,3 +473,30 @@ typedef struct PVRSRV_BRIDGE_PACKAGE_TAG {
 
 	void*    				hKernelServices;		/*!< kernel servcies handle */
 } PVRSRV_BRIDGE_PACKAGE;
+
+typedef struct PVRSRV_BRIDGE_OUT_MHANDLE_TO_MMAP_DATA_TAG {
+    PVRSRV_ERROR		eError;
+
+    /* This is a the offset you should pass to mmap(2) so that
+     * the driver can look up the full details for the mapping
+     * request. */
+     uintptr_t		uiMMapOffset;
+
+    /* This is the byte offset you should add to the mapping you
+     * get from mmap */
+    uintptr_t		uiByteOffset;
+
+    /* This is the real size of the mapping that will be created
+     * which should be passed to mmap _and_ munmap. */
+    size_t 			uiRealByteSize;
+
+    /* User mode address associated with mapping */
+    uintptr_t       uiUserVAddr;
+
+} PVRSRV_BRIDGE_OUT_MHANDLE_TO_MMAP_DATA;
+
+typedef struct PVRSRV_BRIDGE_IN_MHANDLE_TO_MMAP_DATA_TAG
+{
+	uint32_t			ui32BridgeFlags; /* Must be first member of structure */
+	void*   			hMHandle;	 /* Handle associated with the memory that needs to be mapped */
+} PVRSRV_BRIDGE_IN_MHANDLE_TO_MMAP_DATA;
