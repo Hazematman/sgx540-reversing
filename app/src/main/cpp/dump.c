@@ -13,10 +13,9 @@
 #include "stb_ds.h"
 #include <errno.h>
 #include <signal.h>
+#include <sys/stat.h>
 
 static int (*real_ioctl)(int d, unsigned long request, char *argp)=NULL;
-static void* (*real_mmap)(void *addr, size_t len, int prot, int flags,
-           int fildes, off_t off);
 
 #define GPU_FILE "/dev/pvrsrvkm"
 #define ASSERT_ARRAY(a) \
@@ -38,24 +37,6 @@ bool is_gpu(int fd) {
     return count == strlen(GPU_FILE) && strncmp(out, GPU_FILE, count) == 0;
 }
 
-void *mmap(void *addr, size_t len, int prot, int flags,
-           int fildes, off_t off) {
-    if(real_ioctl==NULL) {
-        real_mmap = dlsym(RTLD_NEXT, "mmap");
-        if (NULL == real_mmap) {
-            fprintf(stderr, "Error in `dlsym`: %s\n", dlerror());
-        }
-    }
-
-    void* ret = real_mmap(addr, len, prot, flags, fildes, off);
-
-    if (fildes != 0 && is_gpu(fildes)) {
-        __android_log_print(ANDROID_LOG_VERBOSE, "PVR:", "mmap call on gpu file descriptor %x", fildes);
-    }
-
-    return ret;
-}
-
 void** handles;
 int* fds;
 PVRSRV_BRIDGE_PACKAGE* packs;
@@ -64,6 +45,8 @@ PVRSRV_BRIDGE_IN_MHANDLE_TO_MMAP_DATA* mapped_addresses;
 typedef struct { uint32_t key; uint32_t value; } HandleDevAddr;
 
 HandleDevAddr* handle_addresses = NULL;
+
+int count = 0;
 
 void signal_catcher(int signo, siginfo_t *info, void *context) {
     __android_log_print(ANDROID_LOG_VERBOSE, "PVR:", "Called signal");
@@ -78,23 +61,21 @@ void signal_catcher(int signo, siginfo_t *info, void *context) {
                 __android_log_print(ANDROID_LOG_VERBOSE, "PVR:", "error with mmap hack");
                 continue;
             }
-            __android_log_print(ANDROID_LOG_VERBOSE, "PVR:", "mmap addr: %x handle: %x", new_mmap.uiUserVAddr, mapped_addresses[i].hMHandle);
+            __android_log_print(ANDROID_LOG_VERBOSE, "PVR:", "mmap addr: %x handle: %x, gpu addr: %x", new_mmap.uiUserVAddr, mapped_addresses[i].hMHandle, hmget(handle_addresses, mapped_addresses[i].hMHandle));
 
             char* filename[4096];
-/*
-            uint32_t dev_addr = hmgetp_null(handle_addresses, (uint32_t)mapped_addresses[i].hMHandle)->value;
-            if (dev_addr == 0) {
-                __android_log_print(ANDROID_LOG_VERBOSE, "PVR:", "error with hashtable lookup");
-                continue;
-            }
-            */
-            sprintf(filename, "/sdcard/memory/%x-%x", (uint32_t)mapped_addresses[i].hMHandle, new_mmap.uiRealByteSize);
+            char* dirname[4096];
+
+            sprintf(dirname, "/sdcard/memory/%d", count);
+            mkdir(dirname, 0777);
+            sprintf(filename, "/sdcard/memory/%d/%x-%x", count, (uint32_t)hmget(handle_addresses, mapped_addresses[i].hMHandle), new_mmap.uiRealByteSize);
             __android_log_print(ANDROID_LOG_VERBOSE, "PVR:", "filename: %s handle: %x", filename, mapped_addresses[i].hMHandle);
             FILE* pFile = fopen((const char*)filename, "wb");
             fwrite((const void*)new_mmap.uiUserVAddr, new_mmap.uiRealByteSize, 1, pFile);
             fclose(pFile);
         }
     }
+    count++;
 }
 
 int ioctl(int d, unsigned long request, void *argp) {
@@ -136,11 +117,12 @@ int ioctl(int d, unsigned long request, void *argp) {
                     __android_log_print(ANDROID_LOG_VERBOSE, "PVR:", "allocating %x bytes of memory, handle: %x", sin->uSize, sout->sClientMemInfo.hKernelMemInfo);
                     hmput(handle_addresses, (uint32_t)sout->sClientMemInfo.hKernelMemInfo, sout->sClientMemInfo.sDevVAddr);
                     __android_log_print(ANDROID_LOG_VERBOSE, "PVR:", "base address of allocation: %x", sout->sClientMemInfo.sDevVAddr);
+                    
+                    hmput(handle_addresses, (uint32_t)sout->sClientMemInfo.hKernelMemInfo, sout->sClientMemInfo.sDevVAddr);
+
                     break;
                 }
                 case 0xB: {
-                    //The driver seems to call mmap directly, so we cannot intercept it via LD_PRELOAD
-                    //so we will simply map the memory for ourselves
                     PVRSRV_BRIDGE_OUT_MHANDLE_TO_MMAP_DATA* mmap_data = (PVRSRV_BRIDGE_OUT_MHANDLE_TO_MMAP_DATA*)pack->pvParamOut;
                     if (mmap_data->eError != PVRSRV_OK) {
                         return p;
@@ -150,26 +132,7 @@ int ioctl(int d, unsigned long request, void *argp) {
                     arrput(packs, *pack);
                     arrput(mapped_addresses, (*(PVRSRV_BRIDGE_IN_MHANDLE_TO_MMAP_DATA*)pack->pvParamIn));
                     __android_log_print(ANDROID_LOG_VERBOSE, "PVR:", "the handle is: %x", ((PVRSRV_BRIDGE_IN_MHANDLE_TO_MMAP_DATA*)pack->pvParamIn)->hMHandle);
-                    /*
-                    if (last_mmap_data.hMHandle != 0) {
-                        PVRSRV_BRIDGE_PACKAGE new_pack = *pack;
-                        PVRSRV_BRIDGE_OUT_MHANDLE_TO_MMAP_DATA new_mmap = {0};
-                        new_pack = *pack;
-                        new_pack.pvParamIn  = &last_mmap_data;
-                        new_pack.pvParamOut = &new_mmap;
-                        real_ioctl(d, request, (char*)&new_pack);
-                        if (new_mmap.eError != PVRSRV_OK) {
-                            __android_log_print(ANDROID_LOG_VERBOSE, "PVR:", "error with mmap hack");
-                            return p;
-                        }
-                        __android_log_print(ANDROID_LOG_VERBOSE, "PVR:", "mmap addr: %x", new_mmap.uiUserVAddr);
-                    }
-                    last_mmap_data = *(PVRSRV_BRIDGE_IN_MHANDLE_TO_MMAP_DATA*)(pack->pvParamIn);
-                    */
-                    //#define MMAP2 192
-                    //__android_log_print(ANDROID_LOG_VERBOSE, "PVR:", "get mmap data size: %x", mmap_data->uiRealByteSize);
-                    //void* addr = (void*)syscall(MMAP2, mmap_data->uiRealByteSize, 0x1, 0x1, d, mmap_data->uiMMapOffset);
-                    //__android_log_print(ANDROID_LOG_VERBOSE, "PVR:", "mmaped gpu memory address: %x, %s", addr, strerror(errno));
+
                     break;
                 }
                 default:
