@@ -7,24 +7,25 @@
 
 #define OPC_FMATH 0
 #define OPC_DOTP  1
+#define OPC_MOVC  5
 
 char* fmath_subops[] = {
     "fmad"
 };
 
 uint32_t get_dest_num(uint32_t op0, uint32_t op1) {
-    return(op0 >> 21) & 127;
+    return (op0 & 0xfe00000) >> 0x15;
 }
 
 uint32_t get_src0_num(uint32_t op0, uint32_t op1) {
-    return(op0 >> 14) & 127;
+    return (op0 & 0x1fc000) >> 0xe;
 }
 
 uint32_t get_src1_num(uint32_t op0, uint32_t op1) {
-    return(op0 >> 7) & 127;
+    return (op0 & 0x3f80) >> 7;
 }
 uint32_t get_src2_num(uint32_t op0, uint32_t op1) {
-    return(op0) & 127;
+    return op0 & 0x7f;
 }
 
 int main(int argc, char *argv[]) {
@@ -41,6 +42,7 @@ int main(int argc, char *argv[]) {
 
 //    printf("%x\n", file[1]);
     size_t instruction_count = size / sizeof(uint32_t);
+    printf("%lx instructions\n", instruction_count);
 
     for (int i = 0; i < instruction_count; i += 2) {
         //__builtin_bswap32
@@ -52,12 +54,28 @@ int main(int argc, char *argv[]) {
 //        printf("opcode: %x\n", inst1 >> 27);
 
         //encoding 1 seems to be mostly relevant to arithmetic
-        //encoding 1 checklist
+        //encoding 1 checklist |s indicate bits that are currently understood
+        //op0
+        //bbbbbbbb bbbbbbbb bbbbbbbb bbbbbbbb
+        //????dddd ddd33333 33222222 21111111
+        //
+        //1: operand 0 number
+        //2: operand 1 number
+        //3: operand 2 number
+        //d: destination
+        //
+        //op1
+        //bbbbbbbb bbbbbbbb bbbbbbbb bbbbbbbb
+        //11111??? ???????? ?????22? ????????
+        //
+        //1: opcode
+        //2: sub-opcode
 
         switch (opcode) {
             //TODO find more sub-opcodes, find sub-opcodes for instructions where they're not known yet
             //also there seems to be a "repeat" feature, find how it is encoded
             //check the correctness of the register sources/dests fully and handle register (banks|types)
+            //priority opcodes to decode are for now "1f", "5", "7"
             case OPC_FMATH: {
                 uint32_t subop = (inst1 >> 9) & 0x3;
                 if (subop < S(fmath_subops)) {
