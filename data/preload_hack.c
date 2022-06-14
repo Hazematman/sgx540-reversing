@@ -71,6 +71,12 @@ static const struct gpuinfo thing2 = {
 	};
 
 int main_hook(int argc, char **argv, char **envp) { 
+
+    if (argc != 2) {
+        printf("Please pass an USSE binary file as an argument\n");
+        return 1;
+    }
+
     FILE *ptr;
     printf("dumping: %s\n", argv[1]);
     ptr = fopen(argv[1],"rb");
