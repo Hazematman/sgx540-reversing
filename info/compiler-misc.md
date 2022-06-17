@@ -2,7 +2,17 @@
 
 These are not meant to be an exact specification of the ISA but more along the lines of a log of the order in which i found things
 
+### Registers
+There seem to be 11 different kinds of "registers", so far these have been identified
 
+- r#  : temporary
+- o#  : output
+- pa# : primary attribute
+- sa# : secondary attribute
+- c#  : probably (float?) constant
+- i#  : floating-point internal register
+
+Immediates are written as #num
 
 ### Prelude
 There seems to be a prelude to vertex shaders that's approximately 81 instructions in size, it doesn't vary with any shader change i've done so far
@@ -15,7 +25,7 @@ There are no "simd instructions", instructions which can be repeated work accros
 
 For vertex shaders, after this 81 instruction prelude is followed by instructions to actually manipulate the vertex information
 
-The input vertex info is stored in the `pa0-pa3` registers, one component each, vertex output happens in two stages, first it writes to `o0-o4`, still one component per register,
+The input vertex info is stored in the `pa0-pa3` registers, one component each, vertex output happens in two stages, first it writes to `o0-o3`, still one component per register,
 then `emitvtx.end.freep` is issued, which terminates the vertex shader.
 
 Other notable information is that each instruction that modifies the output registers seems to have a `skipinv` flag set, but the purpose of it remains unknown at the moment,
@@ -55,3 +65,25 @@ code if `.y` is used instead:
 ```
 
 other components vary the code in similar ways, it is at the moment unknown why it uses an i(nternal?) register
+
+This indicates the existence of "repeat delay slots"
+
+### Loops
+
+This glsl code: `for (int i = 0; i < lc; i++) { gl_PointSize += 0.01; }` (and a passthrough `gl_Position`) gets translated to
+
+```
+mov.skipinv.repeat4 o0, pa0
+fadd.skipinv.testpanz.chan0 !c0, p0, sa11, c48
+!p0 br -#0x00000002
+mov.skipinv pa1, c48
+fmad.skipinv pa0, pa0, c52, sa10.flt16.0
+fmad.skipinv pa1, pa1, c52, c52
+fsub.skipinv.testnanz.chan0 !c0, p0, pa1, sa11
+p0 br -#0x00000003
+fmin.skipinv o4, sa10.flt16.2, pa0
+emitvtx.end.freep #0 /* incp */, #0
+```
+
+The purpose of the first loop is at the moment unknown (miscompilation?)
+If a loop with a uniform bound is not used then the compiler will "tile" the operation(s) with `repeat(n)`
