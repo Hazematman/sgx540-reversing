@@ -9,6 +9,9 @@ The tools in this repository can be build using the android studio IDE, after bu
 
 In order to use the dumper you have to first `setenforce 0` on your tablet and then `setprop wrap.com.android.gl2jni LD_PRELOAD=/path/to/libdumper.so`
 
+There's now a frida-based replacement for libdumper, mainly intended to be used together with an SRE tool perform dynamic analysis, for now it does not have all the features of libdumper, to use it
+patch the app apk manually or using a tool such as `objection` and then run `npm run build && frida -U Gadget -l _agent.js` in the frida subdirectory
+
 There is now a disassembler under the directory `data`, the exact instruction encoding still isn't fully reversed yet.
 
 Checklist:
