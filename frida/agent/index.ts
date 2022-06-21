@@ -2,8 +2,11 @@ import { Console } from "console"
 import * as funs from './offsets';
 import { log, in_range, align } from "./util"
 
+
 var glES2Lib = Process.getModuleByName("libGLESv2_POWERVR_SGX540_120.so")
 var umLib    = Process.getModuleByName("libsrv_um_SGX540_120.so")
+var libc     = Process.getModuleByName("libc.so")
+var monitored_ranges: Map<NativePointer, [number, number]> = new Map()
 
 log("gles2 base: " + glES2Lib.base)
 
@@ -33,14 +36,97 @@ DrawArrayFPs_Loaded.map(
     }
 )
 
+//Get all memcpy calls and check if they write to any area of interest
+Interceptor.attach(libc.getExportByName("memcpy"), {
+    onEnter : function(memcpy_args) {
+        monitored_ranges.forEach((val: [number, number], key: NativePointer) => {
+            if (in_range(memcpy_args[0].toUInt32(), key.toUInt32(), val[0])) {
+                let gpu_addr = val[1]
+                let caller = Process.findModuleByAddress(this.returnAddress)
+                if (caller == undefined) {
+                    log("undefined caller")
+                    return
+                }
+                log("code memcpyd to in " + caller.name + " at " + (this.returnAddress.sub(caller.base)) +
+                        " gpu addr: " + gpu_addr.toString(16) + " zone (" + addr_to_name(gpu_addr) + ")")
+            }
+        })
+    }
+})
+
 Interceptor.attach(glES2Lib.base.add(funs.DrawArrayBackend),{
     onEnter : function (args) {
         log("Drawarrays backend")
         log("relative ip: " + this.context.pc.sub(glES2Lib.base))
         log("Primitive type: " + args[1])
+
+        //Stalker.follow(this.threadId, stalker_code)
+    },
+    onLeave : function(ret) {
+        log("leaving the drawarrays backend")
+        //Stalker.unfollow(this.threadId)
         log("\n")
     }
 })
+
+//Code to stalk every single memory access instruction in a certain range (best used on the smallest area possible)
+//this may be useful in case writes to certain mapped areas are not done via memcpy
+let stalker_code = {events: {
+    call: false,
+    ret: false,
+    exec: false,
+    block: false,
+    compile: false 
+  },
+  onReceive(events: ArrayBuffer) {},
+  transform(iterator_g: (StalkerArmIterator | StalkerX86Iterator | StalkerThumbIterator | StalkerArm64Iterator)) {
+    let iterator = <StalkerArmIterator>iterator_g;
+    let instruction = iterator.next()
+    if (instruction == null) {
+        iterator.keep()
+        return
+    }
+    do {
+        if (in_range(instruction.address.toUInt32(), glES2Lib.base.toUInt32(), glES2Lib.size)) {
+            if (instruction.mnemonic.startsWith("st")) {
+                //log(instruction.mnemonic + " " + instruction.opStr)
+                iterator.putCallout(single_step_trace)
+            }
+        } else {
+            //log("outside instruction: " + Process.findModuleByAddress(instruction.address)?.name)
+        }
+        iterator.keep()
+    } while ((instruction = iterator.next()) !== null)
+  }
+}
+
+//TODO: finish the instruction decoding portion
+function single_step_trace(context_g: CpuContext) {
+    var context = <ArmCpuContext>context_g
+    var instruction = <ArmInstruction>Instruction.parse(context.pc)
+    log(instruction.toString())
+    let ops = instruction.operands
+
+    let mem = <ArmMemOperand>ops[1]
+    let base = mem.value.base
+    switch(base) {
+        case "sb":
+            base = "r9"
+        break;
+        case "ip":
+            base = "pc"
+        break
+    }
+    let base_value = context[base as (keyof typeof context)]
+    let index_value = undefined
+    if (mem.value.index != undefined) {
+        index_value = context[mem.value.index as (keyof typeof context)]
+    } else {
+        index_value = new NativePointer(0)
+    }
+
+    let addr = base_value.add(index_value).add(mem.value.disp);
+}
 
 function addr_to_name(addr: number): String {
     if (in_range(addr, 0x1000, 0xb7fe000)) {
@@ -87,10 +173,10 @@ Interceptor.attach(umLib.getExportByName("PVRSRVAllocDeviceMem"), {
         } else {
             log("called from gles2: " + this.returnAddress)
         }
-
     },
 
     onLeave : function (retval) {
+        //get output of the memory allocation function
         var ptr = new NativePointer(this.outputAlloc.readU32());
         var mmaped_addr = new NativePointer(ptr.readU32())
         var gpu_ptr = ptr.add(0x8).readU32()
@@ -99,8 +185,16 @@ Interceptor.attach(umLib.getExportByName("PVRSRVAllocDeviceMem"), {
         log("gpu addr: " + addr_to_name(gpu_ptr) +
             "(" + gpu_ptr.toString(16) + "h)" +
             " len: " + sz.toString(16))
+        log("mapped to: " + mmaped_addr)
         
+        //zero out the memory for easier analysis (the driver doesn't do this)
         var zeros = new Array(this.size.toUInt32()).fill(0);
         mmaped_addr.writeByteArray(zeros)
+
+        //set a manual "watchpoint", Memory.Protect seems to behave wery weirdly on android and causes a full system crash
+        if (is_code(gpu_ptr)) {
+            log("monitoring new range: " + mmaped_addr)
+            monitored_ranges.set(mmaped_addr, [sz, gpu_ptr])
+        }
     }
 })
