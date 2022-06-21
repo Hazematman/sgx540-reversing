@@ -43,12 +43,13 @@ Interceptor.attach(libc.getExportByName("memcpy"), {
             if (in_range(memcpy_args[0].toUInt32(), key.toUInt32(), val[0])) {
                 let gpu_addr = val[1]
                 let caller = Process.findModuleByAddress(this.returnAddress)
+                let offset = memcpy_args[0].sub(key)
                 if (caller == undefined) {
                     log("undefined caller")
                     return
                 }
                 log("code memcpyd to in " + caller.name + " at " + (this.returnAddress.sub(caller.base)) +
-                        " gpu addr: " + gpu_addr.toString(16) + " zone (" + addr_to_name(gpu_addr) + ")")
+                        " gpu addr: " + gpu_addr.toString(16) + " offset " + offset + " zone (" + addr_to_name(gpu_addr) + ")")
             }
         })
     }
