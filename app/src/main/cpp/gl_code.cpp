@@ -24,11 +24,15 @@
 
 #include <stdio.h>
 #include <stdlib.h>
+#include <iostream>
 #include <math.h>
+#include <string>
 #include <vector>
 #include <fstream>
 #include <ios>
 #include <unistd.h>
+#include <cstdio>
+#include <signal.h>
 
 #define  LOG_TAG    "libgl2jni"
 #define  LOGI(...)  __android_log_print(ANDROID_LOG_INFO,LOG_TAG,__VA_ARGS__)
@@ -43,21 +47,45 @@ static void checkGlError(const char* op) {
     for (GLint error = glGetError(); error; error
             = glGetError()) {
         LOGI("after %s() glError (0x%x)\n", op, error);
+        while (1) {}
     }
 }
 
+//next step: try to create a dependent chain of adds and see where that takes me
+
 auto gVertexShader =
     "attribute vec4 vPosition;\n"
+
     "void main() {\n"
       "  gl_Position = vPosition;"
-      "  gl_PointSize = 1.0;"
     "}\n";
 
 auto gFragmentShader =
     "precision mediump float;\n"
+
     "void main() {\n"
-    "  gl_FragColor = vec4(1.0, 0.0 + gl_PointCoord.x, 0.0 + gl_PointCoord.y, 0.0);\n"
+        "  gl_FragColor = vec4(1.0, 1.0, 0.0, 1.0);\n"
     "}\n";
+
+auto gVertexShader2 =
+    "attribute vec4 vPosition;\n"
+
+    "void main() {\n"
+      "  gl_Position = vPosition + vec4(1.0, 1.0, 1.0, 1.0);"
+    "}\n";
+
+auto gFragmentShader2 =
+    "precision mediump float;\n"
+
+    "void main() {\n"
+        "  gl_FragColor = vec4(1.0, 1.0, 1.0, 1.0);\n"
+    "}\n";
+
+
+//TODO try to find a way to actually edit shaders
+
+#include <vector>
+std::vector<GLuint> programs;
 
 GLuint loadShader(GLenum shaderType, const char* pSource) {
     GLuint shader = glCreateShader(shaderType);
@@ -82,18 +110,16 @@ GLuint loadShader(GLenum shaderType, const char* pSource) {
             }
         }
     }
+    programs.push_back(shader);
     return shader;
 }
 
 GLuint createProgram(const char* pVertexSource, const char* pFragmentSource) {
-    LOGE("loading vertex shader");
     GLuint vertexShader = loadShader(GL_VERTEX_SHADER, pVertexSource);
-    LOGE("loaded vertex shader");
     if (!vertexShader) {
         return 0;
     }
 
-    LOGE("loading fragment shader");
     GLuint pixelShader = loadShader(GL_FRAGMENT_SHADER, pFragmentSource);
     if (!pixelShader) {
         return 0;
@@ -101,17 +127,11 @@ GLuint createProgram(const char* pVertexSource, const char* pFragmentSource) {
 
     GLuint program = glCreateProgram();
     if (program) {
-        LOGE("attaching vertex shader to program");
         glAttachShader(program, vertexShader);
-        LOGE("attached vertex shader to program");
         checkGlError("glAttachShader");
-        LOGE("attaching fragment shader to program");
         glAttachShader(program, pixelShader);
-        LOGE("attached fragment shader to program");
         checkGlError("glAttachShader");
-        LOGE("linking program");
         glLinkProgram(program);
-        LOGE("linked program");
         GLint linkStatus = GL_FALSE;
         glGetProgramiv(program, GL_LINK_STATUS, &linkStatus);
         if (linkStatus != GL_TRUE) {
@@ -130,7 +150,13 @@ GLuint createProgram(const char* pVertexSource, const char* pFragmentSource) {
         }
     }
     LOGE("version: %s", glGetString(GL_SHADING_LANGUAGE_VERSION));
-
+/*
+    GLint formats = 0;
+    glGetIntegerv(GL_NUM_PROGRAM_BINARY_FORMATS, &formats);
+    if (formats == 0) {
+        LOGE("no binary formats supported");
+    }
+    LOGE("binary format number: %d", formats);*/
     // Get the binary length
     GLint length = 0;
     glGetProgramiv(program, GL_PROGRAM_BINARY_LENGTH_OES, &length);
@@ -138,9 +164,7 @@ GLuint createProgram(const char* pVertexSource, const char* pFragmentSource) {
     // Retrieve the binary code
     std::vector<GLubyte> buffer(length);
     GLenum format = 0;
-    LOGE("getting program binary");
     glGetProgramBinaryOES(program, length, NULL, &format, buffer.data());
-    LOGE("got program binary");
     if (int i = glGetError() != 0) {
         LOGE("Error %d", i);
         return program;
@@ -155,7 +179,11 @@ GLuint createProgram(const char* pVertexSource, const char* pFragmentSource) {
 }
 
 GLuint gProgram;
+GLuint gProgram2;
 GLuint gvPositionHandle;
+GLuint gvPositionHandle2;
+GLint  sloc;
+GLint  vloc;
 GLint  aloc;
 GLint  bloc;
 
@@ -171,25 +199,26 @@ bool setupGraphics(int w, int h) {
         LOGE("Could not create program.");
         return false;
     }
-    LOGE("getting vert attrib location");
     gvPositionHandle = glGetAttribLocation(gProgram, "vPosition");
-    LOGE("got vert attrib location");
     checkGlError("glGetAttribLocation");
+    sloc = glGetUniformLocation(gProgram, "s");
     aloc = glGetUniformLocation(gProgram, "a");
     bloc = glGetUniformLocation(gProgram, "b");
     checkGlError("glGetUniformLocation");
     LOGI("glGetAttribLocation(\"vPosition\") = %d\n",
             gvPositionHandle);
 
-    LOGE("glviewport");
     glViewport(0, 0, w, h);
-    LOGE("glviewport done");
     checkGlError("glViewport");
     return true;
 }
 
 const GLfloat gTriangleVertices[] = { 0.0f, 0.5f, -0.5f, -0.5f,
-        0.5f, -0.5f };
+        0.5f, -0.5f
+};
+
+
+int frame = 0;
 
 void renderFrame() {
     static float grey = 0.0;
@@ -198,35 +227,93 @@ void renderFrame() {
         grey = 0.0f;
     }
     */
-    LOGE("glclearcolor");
-    glClearColor(grey, grey, grey, 1.0f);
-    LOGE("glclearcolor done");
-    checkGlError("glClearColor");
-    LOGE("glclear depth and color");
-    glClear( GL_DEPTH_BUFFER_BIT | GL_COLOR_BUFFER_BIT);
-    LOGE("glclear depth and color done");
-    checkGlError("glClear");
+    if (frame == 0) {
+        glClearColor(grey, grey, grey, 1.0f);
+        checkGlError("glClearColor");
+        glClear( GL_DEPTH_BUFFER_BIT | GL_COLOR_BUFFER_BIT);
+        checkGlError("glClear");
 
-    LOGE("gl using program");
-    glUseProgram(gProgram);
-    LOGE("gl used program");
-    checkGlError("glUseProgram");
+        glUseProgram(gProgram);
+        checkGlError("glUseProgram");
+        glVertexAttribPointer(gvPositionHandle, 2, GL_FLOAT, GL_FALSE, 0, gTriangleVertices);
+        glUniform4f(sloc, 0.3, 0.3, 0.3, 0.3);
+        glUniform1f(aloc, 0.0);
+        glUniform1f(bloc, 0.9);
+        checkGlError("glVertexAttribPointer");
+        glEnableVertexAttribArray(gvPositionHandle);
+        checkGlError("glEnableVertexAttribArray");
+        glDrawArrays(GL_TRIANGLES, 0, 3);
+        checkGlError("glDrawArrays");
+        glDeleteProgram(gProgram);
+        checkGlError("glDeleteProgram");
+        glDeleteShader(programs[0]);
+        checkGlError("glDeleteShader");
+        glDeleteShader(programs[1]);
+        checkGlError("glDeleteShader");
+        LOGE("deleted shader");
+    } else if (frame == 1) {
+        raise(SIGWINCH);
+        gProgram2 = createProgram(gVertexShader2, gFragmentShader2);
+        if (!gProgram2) {
+            while (1) {}
+        }
+        gvPositionHandle2 = glGetAttribLocation(gProgram2, "vPosition");
+        sloc = glGetUniformLocation(gProgram2, "s");
+        vloc = glGetUniformLocation(gProgram2, "v");
+        aloc = glGetUniformLocation(gProgram2, "a");
+        bloc = glGetUniformLocation(gProgram2, "b");
 
-    LOGE("glvertexattribpointer");
-    glVertexAttribPointer(gvPositionHandle, 2, GL_FLOAT, GL_FALSE, 0, gTriangleVertices);
-    LOGE("glvertexattribpointer done");
-    checkGlError("glVertexAttribPointer");
-    glUniform1f(aloc, 0.3);
-    glUniform1f(bloc, 0.3);
-    checkGlError("glUniform1f");
-    LOGE("glvertexattribarray");
-    glEnableVertexAttribArray(gvPositionHandle);
-    LOGE("glvertexattribarray done");
-    checkGlError("glEnableVertexAttribArray");
-    LOGE("draw arrays");
-    glDrawArrays(GL_TRIANGLES, 0, 3);
-    LOGE("draw arrays done");
-    checkGlError("glDrawArrays");
+        GLint cur = 0;
+        char name[20];
+
+        for (int i = 0; i < 10; i++) {
+/*            std::snprintf(name, 15, "unifloats[%d]", i);
+            LOGE("initializing %s\n", name);
+            cur = glGetUniformLocation(gProgram2, name);
+            checkGlError("glGetUniformLocation");
+            glUniform1f(cur, 0.3);*/
+        }
+
+        glClearColor(grey, grey, grey, 1.0f);
+        checkGlError("glClearColor");
+        glClear( GL_DEPTH_BUFFER_BIT | GL_COLOR_BUFFER_BIT);
+        checkGlError("glClear");
+
+        glUseProgram(gProgram2);
+        checkGlError("glUseProgram");
+        glVertexAttribPointer(gvPositionHandle2, 2, GL_FLOAT, GL_FALSE, 0, gTriangleVertices);
+        glUniform4f(sloc, 0.3, 0.3, 0.3, 0.3);
+        glUniform4f(vloc, 0.3, 0.3, 0.3, 0.3);
+        glUniform1f(aloc, 0.5);
+        glUniform1f(bloc, 0.9);
+        checkGlError("glVertexAttribPointer");
+        glEnableVertexAttribArray(gvPositionHandle2);
+        checkGlError("glEnableVertexAttribArray");
+        glDrawArrays(GL_TRIANGLES, 0, 3);
+        checkGlError("glDrawArrays");
+        LOGE("frame 2");
+    } else if (frame == 2) {
+        raise(SIGWINCH);
+        glClearColor(grey, grey, grey, 1.0f);
+        checkGlError("glClearColor");
+        glClear( GL_DEPTH_BUFFER_BIT | GL_COLOR_BUFFER_BIT);
+        checkGlError("glClear");
+
+        glUseProgram(gProgram2);
+        checkGlError("glUseProgram");
+        glVertexAttribPointer(gvPositionHandle2, 2, GL_FLOAT, GL_FALSE, 0, gTriangleVertices);
+        glUniform4f(sloc, 0.3, 0.3, 0.3, 0.3);
+        glUniform1f(aloc, 0.9);
+        glUniform1f(bloc, 0.9);
+        checkGlError("glVertexAttribPointer");
+        glEnableVertexAttribArray(gvPositionHandle2);
+        checkGlError("glEnableVertexAttribArray");
+        glDrawArrays(GL_TRIANGLES, 0, 3);
+        checkGlError("glDrawArrays");
+        LOGE("frame 3");
+        while (1) { sleep(1); }
+    }
+    frame++;
 }
 
 extern "C" {

@@ -48,8 +48,38 @@ HandleDevAddr* handle_addresses = NULL;
 
 int count = 0;
 
+#define IN_RANGE(val, min, len) (val >= min && val <= (min + len))
+char* addr_to_name(size_t addr) {
+    if (IN_RANGE(addr, 0x1000, 0xb7fe000)) {
+        return "General";
+    } else if (IN_RANGE(addr, 0xc800000, 0xfff000)){
+        return "TAData";
+    } else if (IN_RANGE(addr, 0xe400000, 0x7f000)) {
+        return "KernelCode";
+    } else if (IN_RANGE(addr, 0xf000000, 0x3ff000)) {
+        return "KernelData";
+    } else if (IN_RANGE(addr, 0xf400000, 0x4ff000)) {
+        return "PixelShaderCode";
+    } else if (IN_RANGE(addr, 0xfc00000, 0x1ff000)) {
+        return "VertexShaderCode";
+    } else if (IN_RANGE(addr, 0xdc00000, 0x7ff000)) {
+        return "PDSPPixelCodeData";
+    } else if (IN_RANGE(addr, 0xe800000, 0x7ff000)) {
+        return "PDSPVertexCodeData";
+    } else if (IN_RANGE(addr, 0xd800000, 0x3ff000)) {
+        return "CacheCoherent";
+    } else if (IN_RANGE(addr, 0xb800000, 0)) { //seemingly unused?
+        return "Shared3DParameters";
+    } else if (IN_RANGE(addr, 0xb800000, 0xfff000)) {
+        return "PerContext3DParameters";
+    } else {
+        return "Unknown";
+    }
+}
+
 void signal_catcher(int signo, siginfo_t *info, void *context) {
     __android_log_print(ANDROID_LOG_VERBOSE, "PVR:", "Called signal");
+    return;
     for (int i = 0; i < arrlen(mapped_addresses); i++) {
         if (mapped_addresses[i].hMHandle != 0) {
             PVRSRV_BRIDGE_PACKAGE new_pack = packs[i];
@@ -68,7 +98,8 @@ void signal_catcher(int signo, siginfo_t *info, void *context) {
 
             sprintf(dirname, "/sdcard/memory/%d", count);
             mkdir(dirname, 0777);
-            sprintf(filename, "/sdcard/memory/%d/%x-%x", count, (uint32_t)hmget(handle_addresses, mapped_addresses[i].hMHandle), new_mmap.uiRealByteSize);
+//            sprintf(filename, "/sdcard/memory/%d/%x-%x", count, (uint32_t)hmget(handle_addresses, mapped_addresses[i].hMHandle), new_mmap.uiRealByteSize);
+            sprintf(filename, "/sdcard/memory/%d/%s-%x-%x", count, addr_to_name((uint32_t)hmget(handle_addresses, mapped_addresses[i].hMHandle)), i , new_mmap.uiRealByteSize);
             __android_log_print(ANDROID_LOG_VERBOSE, "PVR:", "filename: %s handle: %x", filename, mapped_addresses[i].hMHandle);
             FILE* pFile = fopen((const char*)filename, "wb");
             fwrite((const void*)new_mmap.uiUserVAddr, new_mmap.uiRealByteSize, 1, pFile);
