@@ -3,6 +3,7 @@ import * as funs from './offsets';
 import { log, in_range, align } from "./util"
 
 
+var androidLibgl = Process.getModuleByName("libGLESv2.so")
 var glES2Lib = Process.getModuleByName("libGLESv2_POWERVR_SGX540_120.so")
 var umLib    = Process.getModuleByName("libsrv_um_SGX540_120.so")
 var libc     = Process.getModuleByName("libc.so")
@@ -12,11 +13,20 @@ log("gles2 base: " + glES2Lib.base)
 
 //Handling of glDrawArrays tracing
 
-Interceptor.attach(glES2Lib.getExportByName("glDrawArrays"), {
+Interceptor.attach(androidLibgl.getExportByName("glDrawArrays"), {
     onEnter : function(args) {
         log("glDrawArrays()")
     }
 })
+
+Interceptor.attach(glES2Lib.getExportByName("glDrawArrays"), {
+    onEnter : function(args) {
+        log("glDrawArrays_SGX()")
+        log("DrawArrays initiated by: " + Thread.backtrace(this.context, Backtracer.ACCURATE)
+                    .map(DebugSymbol.fromAddress).join('\n') + '\n');
+    }
+})
+
 
 var DrawArrayFPs_Loaded = funs.DrawArrayFPs.map(x => glES2Lib.base.add(x))
 
@@ -50,6 +60,8 @@ Interceptor.attach(libc.getExportByName("memcpy"), {
                 }
                 log("code memcpyd to in " + caller.name + " at " + (this.returnAddress.sub(caller.base)) +
                         " gpu addr: " + gpu_addr.toString(16) + " offset " + offset + " zone (" + addr_to_name(gpu_addr) + ")")
+                log("memcpy initiated by: " + Thread.backtrace(this.context, Backtracer.ACCURATE)
+                    .map(DebugSymbol.fromAddress).join('\n') + '\n');
             }
         })
     }
