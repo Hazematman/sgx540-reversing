@@ -1,0 +1,1 @@
+This directory contains code for hooking the opengl library on postmarketos, as the way it communicates with the kernel is slightly different
