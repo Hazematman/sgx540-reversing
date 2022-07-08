@@ -12,4 +12,5 @@ libwebp
 display-p3/third_party
 _agent.js
 node_modules
-.so
+vertex_shader*
+*.so

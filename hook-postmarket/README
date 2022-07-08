@@ -1,1 +1,5 @@
-This directory contains code for hooking the opengl library on postmarketos, as the way it communicates with the kernel is slightly different
+This directory contains code for hooking the opengl library on postmarketos, as the way it communicates with the kernel is slightly different, it can be compiled with the following command:
+
+`gcc -ldl -shared -Wall -Wextra -mthumb ldpreload.c -o intercept.so`
+
+And then loaded using LD_PRELOAD

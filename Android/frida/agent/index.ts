@@ -7,7 +7,9 @@ var androidLibgl = Process.getModuleByName("libGLESv2.so")
 var glES2Lib = Process.getModuleByName("libGLESv2_POWERVR_SGX540_120.so")
 var umLib    = Process.getModuleByName("libsrv_um_SGX540_120.so")
 var libc     = Process.getModuleByName("libc.so")
+
 var monitored_ranges: Map<NativePointer, [number, number]> = new Map()
+var memory_backups: NativePointer[] = []
 
 log("gles2 base: " + glES2Lib.base)
 
@@ -51,6 +53,9 @@ Interceptor.attach(libc.getExportByName("memcpy"), {
     onEnter : function(memcpy_args) {
         monitored_ranges.forEach((val: [number, number], key: NativePointer) => {
             if (in_range(memcpy_args[0].toUInt32(), key.toUInt32(), val[0])) {
+                //setup data for onLeave
+                this.to_track = true
+
                 let gpu_addr = val[1]
                 let caller = Process.findModuleByAddress(this.returnAddress)
                 let offset = memcpy_args[0].sub(key)
@@ -62,8 +67,16 @@ Interceptor.attach(libc.getExportByName("memcpy"), {
                         " gpu addr: " + gpu_addr.toString(16) + " offset " + offset + " zone (" + addr_to_name(gpu_addr) + ")")
                 log("memcpy initiated by: " + Thread.backtrace(this.context, Backtracer.ACCURATE)
                     .map(DebugSymbol.fromAddress).join('\n') + '\n');
+
+                //if we're tracking this memory access it means we also want to know if it was modified, so let's take a backup
+                log("allocating: " + memcpy_args[2])
+                var mem = Memory.alloc(memcpy_args[2].toUInt32())
+                Memory.copy(mem, memcpy_args[1], memcpy_args[2].toUInt32())
+                memory_backups.push(mem)
             }
         })
+    },
+    onLeave : function(ret) {
     }
 })
 
