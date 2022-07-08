@@ -14,18 +14,18 @@ uint32_t a_s = 3;
 
 struct info_unk0
 {
-	uint32_t				unk1;
-	uint32_t				unk2;
-	uint32_t				unk3;
-	uint32_t				unk4;
-	uint32_t				unk5;
-	uint32_t				unk6;
-	uint32_t				unk7;
-	uint32_t				unk8;
-	uint32_t				unk9;
-	uint32_t const*	    	unk10;
-	uint32_t const*	    	unk10_len;
-	char     const*			name;
+    uint32_t                unk1;
+    uint32_t                unk2;
+    uint32_t                unk3;
+    uint32_t                unk4;
+    uint32_t                unk5;
+    uint32_t                unk6;
+    uint32_t                unk7;
+    uint32_t                unk8;
+    uint32_t                unk9;
+    uint32_t const*         unk10;
+    uint32_t const*         unk10_len;
+    char     const*         name;
 };
 
 struct info_unk {
@@ -34,41 +34,41 @@ struct info_unk {
 
 struct gpuinfo
 {
-	uint32_t	             type;
-	uint32_t			     revision;
-	struct info_unk          flags;
+    uint32_t                 type;
+    uint32_t                 revision;
+    struct info_unk          flags;
     uint32_t padding;
-	const struct info_unk0*	 gpu_info;
+    const struct info_unk0*  gpu_info;
 };
 
 
-static const struct info_unk0 thingy =
+static const struct info_unk0 gpudata =
 {
-	 0x24000,
-	 0,
-	 1,
-	 0,
-	 3,
-	 1,
-	 4,
-	 12,
-	 3,
-	 &a_s,
-	 a,
-	 "SGX540",
+     0x24000,
+     0,
+     1,
+     0,
+     3,
+     1,
+     4,
+     12,
+     3,
+     &a_s,
+     a,
+     "SGX540",
 };
 
 #define SGX540 5
 
-static const struct gpuinfo thing2 = {
-		SGX540,
-		101,
-		{
+static const struct gpuinfo ctx = {
+        SGX540,
+        101,
+        {
             0x16b800
-		},
+        },
         0,
-		&thingy,
-	};
+        &gpudata,
+    };
 
 int main_hook(int argc, char **argv, char **envp) { 
 
@@ -91,7 +91,7 @@ int main_hook(int argc, char **argv, char **envp) {
     size_t instruction_count = size / sizeof(uint32_t);
 
     //trust me
-    ((void(*) (const void*, uint32_t, uint32_t*))0x082994cb)(&thing2, instruction_count, file);
+    ((void(*) (const void*, uint32_t, uint32_t*))0x082994cb)(&ctx, instruction_count, file);
     //note that this address may need to be adjusted for different versions of the compiler
 
     return 0;
