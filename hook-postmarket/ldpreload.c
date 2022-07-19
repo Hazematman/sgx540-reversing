@@ -139,7 +139,6 @@ static uintptr_t monitor_cpu_addr = 0;
 static bool running = false;
 static size_t last_break = 0;
 static size_t last_addr = 0;
-
 static size_t addr_test = 0;
 
 static void handler(int, siginfo_t* siginfo, void* uap) {
@@ -270,10 +269,7 @@ HOOK(mprotect, (void *addr, size_t len, int prot), int, {
         }
 })
 
-bool thread_spawned = false;
-static bool installed = false;
-
-void* thread(void* data) {
+void* thread() {
     printf("thread\n");
 
     sigset_t set;
@@ -300,44 +296,8 @@ void* thread(void* data) {
 }
 
 HOOK(PVRSRVAllocDeviceMem, (void* data, void* handle, uint32_t attribs, uint32_t size, uint32_t align, PVRSRV_CLIENT_MEM_INFO** info), int, {
-//  printf("\nallocating %x bytes of device memory\n", size);
     int ret = real_PVRSRVAllocDeviceMem(data, handle, attribs, size, align, info);
     printf("allocated %x bytes of memory at %p : %x (%s)\n", size, (*info)->pvLinAddr, (*info)->sDevVAddr, addr_to_name((*info)->sDevVAddr));
-    sigset_t set;
-
-    if (!installed) {
-        //install the signal handler
-        struct sigaction act;
-        memset(&act, 0, sizeof(struct sigaction));
-        sigemptyset(&act.sa_mask);
-        act.sa_sigaction = handler;
-        act.sa_flags = SA_SIGINFO | SA_ONSTACK;
-        installed = true;
-        sigaction(SIGSEGV, &act, NULL);
-
-        memset(&act, 0, sizeof(struct sigaction));
-        sigemptyset(&act.sa_mask);
-        act.sa_sigaction = trap_handler;
-        act.sa_flags = SA_SIGINFO | SA_ONSTACK;
-        installed = true;
-        sigaction(SIGTRAP, &act, NULL);
-    }
-
-    if (!thread_spawned) {
-        sigemptyset(&set);
-        pthread_sigmask(SIG_BLOCK, &set, NULL);
-
-        pthread_t pthread;
-        if (pthread_create(&pthread, NULL, thread, (void*)0)) {
-            printf("Could not create thread\n");
-            exit(1);
-        }
-        thread_spawned = true;
-
-        sigemptyset(&set);
-//        sigaddset(&set, SIGINT);
-        pthread_sigmask(SIG_BLOCK, &set, NULL);
-    }
 
     memset((*info)->pvLinAddr, 0, size);
 
@@ -346,10 +306,6 @@ HOOK(PVRSRVAllocDeviceMem, (void* data, void* handle, uint32_t attribs, uint32_t
     new.gpu_addr = (*info)->sDevVAddr;
     new.size = size;
     arrput(map, new);
-    if (!strcmp(addr_to_name(new.gpu_addr), "VertexShaderCode")) {
-        //raise a signal and then we attach gdb
-//        raise(SIGSEGV);
-    }
 
     if (!strcmp(addr_to_name((*info)->sDevVAddr), "VertexShaderCode") && ((*info)->sDevVAddr == 0xfc00000)) {
         monitor_cpu_addr = (uint32_t)(*info)->pvLinAddr;
@@ -373,9 +329,6 @@ HOOK(PVRSRVAllocDeviceMem, (void* data, void* handle, uint32_t attribs, uint32_t
 HOOK(memcpy, (void *restrict dest, const void *restrict src, size_t n), void*, {
     uintptr_t d = (uintptr_t)dest;
 
-    void* area_base = 0;
-    size_t area_size = 0;
-
     for (int i = 0; i < arrlen(map); i++) {
         Allocation cur = map[i];
         if (IN_RANGE(d, ((uintptr_t)cur.cpu_addr), cur.size)) {
@@ -393,16 +346,57 @@ HOOK(memcpy, (void *restrict dest, const void *restrict src, size_t n), void*, {
 
             printf("\nmemcpy to gpu area (%s), offset %x, size: %x, function addr: %x, library name: %s, area base: %x, area size: %x\n",
                     addr_to_name(cur.gpu_addr), mem_off, n, off, lib, cur.gpu_addr, cur.size);
-
-           // uint8_t* source = (uint8_t*)src;
-           
-            if (cur.gpu_addr == 0xfc00000) {
-                area_size = cur.size;
-                area_base = cur.cpu_addr;
-            }
-
         }
     }
 
     return real_memcpy(dest, src, n);;
 })
+
+static int (*main_orig)(int, char **, char **);
+
+int main_hook(int argc, char **argv, char **envp) { 
+    sigset_t set;
+    //install the signal handler
+    struct sigaction act;
+    memset(&act, 0, sizeof(struct sigaction));
+    sigemptyset(&act.sa_mask);
+    act.sa_sigaction = handler;
+    act.sa_flags = SA_SIGINFO | SA_ONSTACK;
+    sigaction(SIGSEGV, &act, NULL);
+
+    memset(&act, 0, sizeof(struct sigaction));
+    sigemptyset(&act.sa_mask);
+    act.sa_sigaction = trap_handler;
+    act.sa_flags = SA_SIGINFO | SA_ONSTACK;
+    sigaction(SIGTRAP, &act, NULL);
+
+    sigemptyset(&set);
+    pthread_sigmask(SIG_BLOCK, &set, NULL);
+
+    pthread_t pthread;
+    if (pthread_create(&pthread, NULL, thread, (void*)0)) {
+        printf("Could not create thread\n");
+        exit(1);
+    }
+
+    sigemptyset(&set);
+    pthread_sigmask(SIG_BLOCK, &set, NULL);
+
+    return main_orig(argc, argv, envp);
+}
+
+int __libc_start_main(
+    int (*main)(int, char **, char **),
+    int argc,
+    char **argv,
+    int (*init)(int, char **, char **),
+    void (*fini)(void),
+    void (*rtld_fini)(void),
+    void *stack_end) {
+
+    main_orig = main;
+
+    typeof(&__libc_start_main) orig = dlsym(RTLD_NEXT, "__libc_start_main");
+
+    return orig(main_hook, argc, argv, init, fini, rtld_fini, stack_end);
+}
