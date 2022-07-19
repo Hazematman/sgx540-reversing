@@ -12,8 +12,9 @@
 #define STB_DS_IMPLEMENTATION
 #include "stb_ds.h"
 #include <sys/mman.h>
-#include <signal.h>
 #include <ucontext.h>
+#include <pthread.h>
+#include <sched.h>
 #include <unistd.h>
 
 #define HOOK(fn_name, fn_args, fn_type, code) fn_type fn_name fn_args {\
@@ -41,19 +42,14 @@
 typedef struct {
     /* CPU Virtual Address */
     void*                   pvLinAddr;
-
     /* CPU Virtual Address (for kernel mode) */
     void*                   pvLinAddrKM;
-
     /* Device Virtual Address */
     uint32_t                sDevVAddr;
-
     /* allocation flags */
     uint32_t                ui32Flags;
-
     /* client allocation flags */
     uint32_t                ui32ClientFlags;
-
     /* allocation size in bytes */
     size_t                  uAllocSize;
     //...
@@ -136,12 +132,15 @@ static int iterate_callback (struct dl_phdr_info *info, size_t, void *) {
 
 //TODO this entire part of code should be reworked to support multiple memory areas ans generally cleaned up
 
-static bool installed = false;
 static uint16_t saved = 0;
 static uintptr_t saved_addr = 0;
 static int num_changes = 0;
 static uintptr_t monitor_cpu_addr = 0;
 static bool running = false;
+static size_t last_break = 0;
+static size_t last_addr = 0;
+
+static size_t addr_test = 0;
 
 static void handler(int, siginfo_t* siginfo, void* uap) {
     running = true;
@@ -163,6 +162,9 @@ static void handler(int, siginfo_t* siginfo, void* uap) {
     printf("\nwrite in library::: %s offset: %x ip: %lx\n", lib, off, context->uc_mcontext.arm_pc);
     printf("\nat: %x %p %x\n", monitor_cpu_addr, siginfo->si_addr, (uintptr_t)siginfo->si_addr - monitor_cpu_addr);
 
+    last_break = off;
+    last_addr = (uint32_t)siginfo->si_addr;
+
     uintptr_t page = ALIGN_DOWN(((uintptr_t)addr), (getpagesize()));
     mprotect((void*)page, 0x8000, PROT_READ | PROT_WRITE);
     uintptr_t codepage = ALIGN_DOWN(((uintptr_t)context->uc_mcontext.arm_pc), (getpagesize()));
@@ -176,7 +178,7 @@ static void handler(int, siginfo_t* siginfo, void* uap) {
         printf("\nARM\n");
     }
     
-    uint16_t* ins = (uint32_t*)((uintptr_t)context->uc_mcontext.arm_pc);
+    uint16_t* ins = (uint16_t*)((uintptr_t)context->uc_mcontext.arm_pc);
     uint16_t* c_instruction = (uint16_t*)0;
 
     printf("checking instruction: %x\n", *ins);
@@ -203,9 +205,28 @@ static void handler(int, siginfo_t* siginfo, void* uap) {
     return;
 }
 
+#define INSTR(hex) *d6 = hex; d6++;
+
 static void trap_handler(int, siginfo_t*, void* uap) {
+    static int num = 0;
     running = true;
-    printf("caught sigtrap\n");
+    if (last_break == 0x419e6) {
+        if (num > 1) {
+            printf("\nrewriting epilogue\n");
+            uint64_t *d6 = (uint64_t*)(last_addr - 4);
+            INSTR(0xFC2030C000603004);//address to r3
+
+            INSTR(0xFC20000000000000);//write output
+            INSTR(0xFC20000000200002);//write output
+            INSTR(0x2801700020000080);//write output
+            INSTR(0xF02A00008000C002);//write output
+
+            INSTR(0xF02B0000A000C101);//signal ready
+            INSTR(0xFB275000A0200000);
+        }
+        num++;
+    }
+
     ucontext_t *context = (ucontext_t *)uap;
     uint16_t* c_instruction = (uint16_t*)((uintptr_t)context->uc_mcontext.arm_pc);
     *c_instruction = saved;
@@ -249,10 +270,40 @@ HOOK(mprotect, (void *addr, size_t len, int prot), int, {
         }
 })
 
+bool thread_spawned = false;
+static bool installed = false;
+
+void* thread(void* data) {
+    printf("thread\n");
+
+    sigset_t set;
+    sigemptyset(&set);
+    pthread_sigmask(SIG_BLOCK, &set, NULL);
+
+    while (!addr_test) {sched_yield();}
+
+    printf("\naddress is ready, starting monitor\n");
+
+    volatile uint32_t* signal = ((uint32_t*)(addr_test + 8));
+
+    while (*signal != 0x1) { sched_yield(); }
+
+    printf("\ngot signal\n");
+
+    volatile uint32_t* dumped = ((uint32_t*)(addr_test));
+    printf("\ndumped register: %x\n", *dumped);
+
+    volatile float* ack = ((float*)(addr_test + 4));
+    *ack = 1.0;
+
+    while (1) { sched_yield(); }
+}
+
 HOOK(PVRSRVAllocDeviceMem, (void* data, void* handle, uint32_t attribs, uint32_t size, uint32_t align, PVRSRV_CLIENT_MEM_INFO** info), int, {
 //  printf("\nallocating %x bytes of device memory\n", size);
     int ret = real_PVRSRVAllocDeviceMem(data, handle, attribs, size, align, info);
     printf("allocated %x bytes of memory at %p : %x (%s)\n", size, (*info)->pvLinAddr, (*info)->sDevVAddr, addr_to_name((*info)->sDevVAddr));
+    sigset_t set;
 
     if (!installed) {
         //install the signal handler
@@ -272,6 +323,22 @@ HOOK(PVRSRVAllocDeviceMem, (void* data, void* handle, uint32_t attribs, uint32_t
         sigaction(SIGTRAP, &act, NULL);
     }
 
+    if (!thread_spawned) {
+        sigemptyset(&set);
+        pthread_sigmask(SIG_BLOCK, &set, NULL);
+
+        pthread_t pthread;
+        if (pthread_create(&pthread, NULL, thread, (void*)0)) {
+            printf("Could not create thread\n");
+            exit(1);
+        }
+        thread_spawned = true;
+
+        sigemptyset(&set);
+//        sigaddset(&set, SIGINT);
+        pthread_sigmask(SIG_BLOCK, &set, NULL);
+    }
+
     memset((*info)->pvLinAddr, 0, size);
 
     struct Allocation new;
@@ -287,6 +354,15 @@ HOOK(PVRSRVAllocDeviceMem, (void* data, void* handle, uint32_t attribs, uint32_t
     if (!strcmp(addr_to_name((*info)->sDevVAddr), "VertexShaderCode") && ((*info)->sDevVAddr == 0xfc00000)) {
         monitor_cpu_addr = (uint32_t)(*info)->pvLinAddr;
         mprotect((void*)(*info)->pvLinAddr, size, PROT_READ);
+//        addr_test = (uint32_t)(*info)->pvLinAddr + 100 * 8;
+    } else if (!strcmp(addr_to_name((*info)->sDevVAddr), "CacheCoherent") && ((*info)->sDevVAddr == 0xd803000)) {
+        PVRSRV_CLIENT_MEM_INFO* nInfo = malloc(0x8000);
+        real_PVRSRVAllocDeviceMem(data, handle, attribs, 12, align, &nInfo);
+        printf("cache coherent hook, new allocation: %p %x\n", nInfo->pvLinAddr, nInfo->sDevVAddr);
+        memset((nInfo)->pvLinAddr, 0xaa, 12);
+//        memset((void*)((uintptr_t)(nInfo)->pvLinAddr + 4), 0xaa, 4);
+        *(float*)((uintptr_t)(nInfo)->pvLinAddr + 4) = 3.0;
+        addr_test = (uint32_t)(nInfo)->pvLinAddr;
     }
 
     fflush(stdout);
@@ -297,7 +373,6 @@ HOOK(PVRSRVAllocDeviceMem, (void* data, void* handle, uint32_t attribs, uint32_t
 HOOK(memcpy, (void *restrict dest, const void *restrict src, size_t n), void*, {
     uintptr_t d = (uintptr_t)dest;
 
-    bool write = false;
     void* area_base = 0;
     size_t area_size = 0;
 
@@ -323,27 +398,11 @@ HOOK(memcpy, (void *restrict dest, const void *restrict src, size_t n), void*, {
            
             if (cur.gpu_addr == 0xfc00000) {
                 area_size = cur.size;
-                write = true;
                 area_base = cur.cpu_addr;
             }
 
         }
     }
 
-//    uint64_t a = 0x00A3300550001A34;
-    void* res;
-
-    if (!write) {
-        res = real_memcpy(dest, src, n);
-    } else {
-        res = real_memcpy(dest, src, n);
- //       uint64_t* d6 = (uint64_t*)dest;
-  //      *d6 = a;
-    }
-
-    if (write) {
-        DUMP("vertex_shader", num_changes, area_base, area_size);
-    }
-
-    return res;
+    return real_memcpy(dest, src, n);;
 })

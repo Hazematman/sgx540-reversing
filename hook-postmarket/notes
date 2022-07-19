@@ -1,0 +1,61 @@
+memory has been initialized to 0 0 0 0 aa aa aa aa
+
+83: 0xFC2030C000003004        mov r0, #0x0D803004
+84: 0xFC200020002D5543        mov r1, #0x004D5543
+85: 0xE82A000080200080        ldad.bpcache r1, [r0,+#1], drc0
+86: 0xF02A000080000001        stad.bpcache [r0,+#0], r1
+87: 0xFB275000A0200000        emitvtx.end.freep #0 /* incp */, #0
+
+the gpu says: 4d5543
+
+83: 0xFC2030C000003004        mov r0, #0x0D803004
+84: 0xE82A000080200080        ldad.bpcache r1, [r0,+#1], drc0
+85: 0xF02A000080000001        stad.bpcache [r0,+#0], r1
+86: 0xFB275000A0200000        emitvtx.end.freep #0 /* incp */, #0
+
+the gpu says: aaaaaaaa
+
+So there's some weird handling of WAWs... but this does not happen with a simple "mov" right before, that is:
+
+82: 0x28A13001A0000000        mov.skipinv.repeat4 o0, pa0
+83: 0xFC2030C000003004        mov r0, #0x0D803004
+84: 0xFC200020002D5543        mov r1, #0x004D5543
+85: 0xFC200020002D5542        mov r1, #0x004D5542
+86: 0xF02A000080000001        stad.bpcache [r0,+#0], r1
+87: 0xFB275000A0200000        emitvtx.end.freep #0 /* incp */, #0
+
+the gpu says: 4d5542
+
+Now
+
+83: 0xFC2030C000003004        mov r0, #0x0D803004
+84: 0xFC200020002D5543        mov r1, #0x004D5543
+85: 0xE82A000080200080        ldad.bpcache r1, [r0,+#1], drc0
+86: 0xF02A000080000001        stad.bpcache [r0,+#0], r1
+87: 0xF02A000080000001        stad.bpcache [r0,+#0], r1
+88: 0xF02A000080000001        stad.bpcache [r0,+#0], r1
+89: 0xF02A000080000001        stad.bpcache [r0,+#0], r1
+90: 0xF02A000080000001        stad.bpcache [r0,+#0], r1
+91: 0xF02A000080000001        stad.bpcache [r0,+#0], r1
+92: 0xF02A000080000001        stad.bpcache [r0,+#0], r1
+93: 0xF02A000080000001        stad.bpcache [r0,+#0], r1
+94: 0xF02A000080000001        stad.bpcache [r0,+#0], r1
+95: 0xF02A000080000001        stad.bpcache [r0,+#0], r1
+96: 0xF02A000080000001        stad.bpcache [r0,+#0], r1
+97: 0xFB275000A0200000        emitvtx.end.freep #0 /* incp */, #0
+
+the gpu says: aaaaaaaa
+
+So there is at least a 10-cycle delay for this to be valid
+
+Using an immediate as a destination writes to the index register (either high or low, idk why)
+
+Source 0 does not support the full range of registers banks, the field is just 1 bit for some reason
+
+Repeta works by running the instruction on consecutive registers, eg
+
+mov.repeat4 r0, o0 
+
+moves o0-o3 to r0-r3
+
+There's also a swizzle feature, it acts the same as repeat but can reorder the elements.
