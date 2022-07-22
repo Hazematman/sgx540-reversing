@@ -58,4 +58,21 @@ mov.repeat4 r0, o0
 
 moves o0-o3 to r0-r3
 
-There's also a swizzle feature, it acts the same as repeat but can reorder the elements.
+There's also a swizzle feature, it acts similarly to repeat but can reorder the elements:
+
+mov.xzy o0, r0
+->
+mov o0, r0
+mov o2, r1
+mov o1, r2
+
+in addition it can also do this:
+
+mov o0.y, r0
+->
+mov o1, r0
+
+lapc seems to implement "return", along with moving directly to the link register
+
+wdf seems to be able to take drc0 (maybe it's to wait for a load to complete?), idf is similar but has a second parameter that can be "st"
+it might be beneficial to wait on one of these after a load or a store to make sure it is completed

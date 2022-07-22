@@ -1,0 +1,3 @@
+This directory contains dumps and disassembly for the SGX microkernel (only USE code so far)
+
+Note that there are a few "patch points" that seem to be marked by the constant 0xDEADBEEF that are written to by pvrsrvinit (or rather libsrv_init)
