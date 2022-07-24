@@ -1,3 +1,5 @@
 This directory contains dumps and disassembly for the SGX microkernel (only USE code so far)
 
 Note that there are a few "patch points" that seem to be marked by the constant 0xDEADBEEF that are written to by pvrsrvinit (or rather libsrv_init)
+
+While loading the ukernel it seems like the userspace library builds up a "script" that writes to hardware registers later in kernelspace, the PDS code for the kernel is for now unknown.
