@@ -38,6 +38,7 @@
 #define ALIGN(x,a)              __ALIGN_MASK(x,(typeof(x))(a)-1)
 #define __ALIGN_MASK(x,mask)    (((x)+(mask))&~(mask))
 #define ALIGN_DOWN(x, a)    ALIGN((x) - ((a) - 1), (a))
+#define ROUND_UP(N, S) ((((N) + (S) - 1) / (S)) * (S))
 
 typedef struct {
     /* CPU Virtual Address */
@@ -108,8 +109,111 @@ typedef struct Library {
     const char* name;
 } Library;
 
+//TODO we rely on the fact that all the programs we're testing are single-threaded
+typedef struct Watchpoint {
+    uintptr_t address;
+    size_t len;
+    //instruction to restore
+    uint16_t instr;
+    uint32_t bp_addr;
+    //address that caused the last fault
+    uint32_t addr;
+    //last offset from the base of a library
+    size_t addr_off;
+    const char* lib_name;
+    void (*callback_pre) (uintptr_t address, struct Watchpoint hit);
+    void (*callback_post) (uintptr_t addr, struct Watchpoint hit);
+} Watchpoint;
+
 static Allocation* map;
 static Library*    libraries;
+static Watchpoint* watchpoints;
+
+static int num_changes = 0;
+static size_t addr_test = 0;
+
+static void sev_handler(int, siginfo_t* siginfo, void* uap) {
+    uintptr_t addr = (uintptr_t)siginfo->si_addr;
+    ucontext_t *context = (ucontext_t *)uap;
+    printf("fault at address %p\n", siginfo->si_addr);
+
+    for (int i = 0; i < arrlen(watchpoints); i++) {
+        Watchpoint cur = watchpoints[i];
+
+        if (IN_RANGE((size_t)addr, cur.address, cur.len)) {
+            printf("hit watchpoint %d\n", i);
+
+            uintptr_t page = ALIGN_DOWN(((uintptr_t)addr), (getpagesize()));
+            mprotect((void*)page, cur.len, PROT_READ | PROT_WRITE);
+
+            uintptr_t codepage = ALIGN_DOWN(((uintptr_t)context->uc_mcontext.arm_pc), (getpagesize()));
+            mprotect((void*)codepage, getpagesize(), PROT_READ | PROT_WRITE | PROT_EXEC);
+
+            uint16_t* ins = (uint16_t*)((uintptr_t)context->uc_mcontext.arm_pc);
+            uint16_t* c_instruction = (uint16_t*)0;
+
+            const char* lib;
+            size_t off;
+
+            int j = 0;
+            for (j = 0; j < arrlen(libraries); j++)  {
+                if (IN_RANGE((context->uc_mcontext.arm_pc), libraries[j].base, libraries[j].size)) {
+                    lib = libraries[j].name;
+                    off = (context->uc_mcontext.arm_pc) - libraries[j].base;
+                    break;
+                }
+            }
+
+            printf("in lib %s\n", lib);
+
+            if (((*ins >> 13) & 0b111) == 0b111) {
+                c_instruction = (uint16_t*)((uintptr_t)context->uc_mcontext.arm_pc + 4);
+            } else {
+                c_instruction = (uint16_t*)((uintptr_t)context->uc_mcontext.arm_pc + 2);
+            }
+            watchpoints[i].instr = (*c_instruction);
+            watchpoints[i].bp_addr = (uint32_t)(c_instruction);
+            watchpoints[i].addr = addr;
+            watchpoints[i].addr_off = off;
+            watchpoints[i].lib_name = lib;
+
+            if (cur.callback_pre) {
+                cur.callback_pre(addr, cur);
+            }
+
+            *c_instruction = 0xde01;
+            __clear_cache((char*)(codepage), (char*)(codepage + getpagesize() * 10));
+
+            return;
+        }
+    }
+
+    printf("real segmentation fault\n");
+    exit(1);
+}
+
+static void trap_handler(int, siginfo_t*, void* uap) {
+    ucontext_t *context = (ucontext_t *)uap;
+    uint32_t addr = (uint32_t)(context->uc_mcontext.arm_pc);
+
+    for (int i = 0; i < arrlen(watchpoints); i++) {
+        Watchpoint cur = watchpoints[i];
+        if (cur.bp_addr == addr) {
+            uint16_t* c_instruction = (uint16_t*)((uintptr_t)context->uc_mcontext.arm_pc);
+            *c_instruction = cur.instr;
+//            printf("\nreplacing instruction at %p %x\n", c_instruction, *c_instruction);
+            uintptr_t codepage = ALIGN_DOWN(((uintptr_t)context->uc_mcontext.arm_pc), (getpagesize()));
+            __clear_cache((char*)(codepage), (char*)(codepage + getpagesize() * 10));
+            mprotect((void*)ALIGN_DOWN(((uintptr_t)cur.addr), (getpagesize())), cur.len, PROT_READ);
+
+            if (cur.callback_post) {
+                cur.callback_post(cur.addr, cur);
+            }
+            break;
+        }
+    }
+}
+
 static int iterate_callback (struct dl_phdr_info *info, size_t, void *) {
     size_t last_addr = 0;
 
@@ -130,117 +234,6 @@ static int iterate_callback (struct dl_phdr_info *info, size_t, void *) {
     return 0;
 }
 
-//TODO this entire part of code should be reworked to support multiple memory areas ans generally cleaned up
-
-static uint16_t saved = 0;
-static uintptr_t saved_addr = 0;
-static int num_changes = 0;
-static uintptr_t monitor_cpu_addr = 0;
-static bool running = false;
-static size_t last_break = 0;
-static size_t last_addr = 0;
-static size_t addr_test = 0;
-
-static void handler(int, siginfo_t* siginfo, void* uap) {
-    running = true;
-    void* addr = siginfo->si_addr;
-    ucontext_t *context = (ucontext_t *)uap;
-    const char* lib;
-    size_t off;
-
-
-    int j = 0;
-    for (j = 0; j < arrlen(libraries); j++)  {
-        if (IN_RANGE((context->uc_mcontext.arm_pc), libraries[j].base, libraries[j].size)) {
-            lib = libraries[j].name;
-            off = (context->uc_mcontext.arm_pc) - libraries[j].base;
-            break;
-        }
-    }
-
-    printf("\nwrite in library::: %s offset: %x ip: %lx\n", lib, off, context->uc_mcontext.arm_pc);
-    printf("\nat: %x %p %x\n", monitor_cpu_addr, siginfo->si_addr, (uintptr_t)siginfo->si_addr - monitor_cpu_addr);
-
-    last_break = off;
-    last_addr = (uint32_t)siginfo->si_addr;
-
-    uintptr_t page = ALIGN_DOWN(((uintptr_t)addr), (getpagesize()));
-    mprotect((void*)page, 0x8000, PROT_READ | PROT_WRITE);
-    uintptr_t codepage = ALIGN_DOWN(((uintptr_t)context->uc_mcontext.arm_pc), (getpagesize()));
-    mprotect((void*)codepage, getpagesize(), PROT_READ | PROT_WRITE | PROT_EXEC);
-
-    saved_addr = page;
-
-    if (context->uc_mcontext.arm_cpsr & 0x20) {
-        printf("\nTHUMB\n");
-    } else {
-        printf("\nARM\n");
-    }
-    
-    uint16_t* ins = (uint16_t*)((uintptr_t)context->uc_mcontext.arm_pc);
-    uint16_t* c_instruction = (uint16_t*)0;
-
-    printf("checking instruction: %x\n", *ins);
-    if (((*ins >> 13) & 0b111) == 0b111) {
-        printf("\nthumb32\n");
-        c_instruction = (uint16_t*)((uintptr_t)context->uc_mcontext.arm_pc + 4);
-    } else {
-        printf("\nthumb16\n");
-        c_instruction = (uint16_t*)((uintptr_t)context->uc_mcontext.arm_pc + 2);
-    }
-
-    saved = (*c_instruction);
-    printf("\nreplacing instruction at %p %x off: %x\n", c_instruction, saved, (uintptr_t)c_instruction - libraries[j].base);
-    *c_instruction = 0xde01;
-    __clear_cache((char*)(codepage - getpagesize() * 10), (char*)(codepage + getpagesize() * 10));
-
-    for (int i = 0; i < arrlen(map); i++) {
-        Allocation cur = map[i];
-
-        if (IN_RANGE(((uintptr_t)addr), ((uintptr_t)cur.cpu_addr), cur.size)) {
-        }
-    }
-    running = false;
-    return;
-}
-
-#define INSTR(hex) *d6 = hex; d6++;
-
-static void trap_handler(int, siginfo_t*, void* uap) {
-    static int num = 0;
-    running = true;
-    if (last_break == 0x419e6) {
-        if (num > 1) {
-            printf("\nrewriting epilogue\n");
-            uint64_t *d6 = (uint64_t*)(last_addr - 4);
-            INSTR(0xFC2030C000603004);//address to r3
-
-            INSTR(0xFC20000000000000);//write output
-            INSTR(0xFC20000000200002);//write output
-            INSTR(0x2801700020000080);//write output
-            INSTR(0xF02A00008000C002);//write output
-
-            INSTR(0xF02B0000A000C101);//signal ready
-            INSTR(0xFB275000A0200000);
-        }
-        num++;
-    }
-
-    ucontext_t *context = (ucontext_t *)uap;
-    uint16_t* c_instruction = (uint16_t*)((uintptr_t)context->uc_mcontext.arm_pc);
-    *c_instruction = saved;
-    printf("\nreplacing instruction at %p %x\n", c_instruction, *c_instruction);
-    uintptr_t codepage = ALIGN_DOWN(((uintptr_t)context->uc_mcontext.arm_pc), (getpagesize()));
-    __clear_cache((char*)(codepage - getpagesize() * 10), (char*)(codepage + getpagesize() * 10));
-    mprotect((void*)saved_addr, 0x8000, PROT_READ);
-
-    DUMP("vertex_shader", num_changes, saved_addr, 0x8000);
-    num_changes++;
-
-    running = false;
-    return;
-}
-
 HOOK(dlopen, (const char *filename, int flags), void*, { 
     //HACK, this probably should be changed
     void* ret = real_dlopen(filename, flags | RTLD_GLOBAL);
@@ -250,23 +243,6 @@ HOOK(dlopen, (const char *filename, int flags), void*, {
 
     dl_iterate_phdr(iterate_callback, 0);
     return ret;
-})
-
-HOOK(mprotect, (void *addr, size_t len, int prot), int, {
-        uintptr_t addr_k = (uintptr_t)addr;
-        if (IN_RANGE(addr_k, monitor_cpu_addr, 0x8000)) {
-            if (running) {
-                int ret = real_mprotect(addr, len, prot);
-                return ret;
-            } else {
-                int ret = real_mprotect(addr, len, PROT_READ);
-                printf("\nexternal mprotect\n");
-                return ret;
-            }
-        } else {
-            int ret = real_mprotect(addr, len, prot);
-            return ret;
-        }
 })
 
 void* thread() {
@@ -295,6 +271,29 @@ void* thread() {
     while (1) { sched_yield(); }
 }
 
+void gpu_mem_prewrite(uintptr_t address, struct Watchpoint hit) {
+    printf("callback\n");
+    return;
+}
+
+void gpu_mem_postwrite(uintptr_t address, struct Watchpoint hit) {
+    printf("write in library: %s at offset %x\n", hit.lib_name, hit.addr_off);
+    return;
+}
+
+void add_watchpoint(uintptr_t addr, size_t size,
+    void (*callback_pre) (uintptr_t address, struct Watchpoint hit),
+    void (*callback_post) (uintptr_t address, struct Watchpoint hit) ) {
+        struct Watchpoint new;
+        new.address = (uintptr_t)addr;
+        new.len = size;
+        new.callback_pre = callback_pre;
+        new.callback_post = callback_post;
+
+        arrput(watchpoints, new);
+        mprotect((void*)addr, size, PROT_READ);
+}
+
 HOOK(PVRSRVAllocDeviceMem, (void* data, void* handle, uint32_t attribs, uint32_t size, uint32_t align, PVRSRV_CLIENT_MEM_INFO** info), int, {
     int ret = real_PVRSRVAllocDeviceMem(data, handle, attribs, size, align, info);
     printf("allocated %x bytes of memory at %p : %x (%s)\n", size, (*info)->pvLinAddr, (*info)->sDevVAddr, addr_to_name((*info)->sDevVAddr));
@@ -308,10 +307,10 @@ HOOK(PVRSRVAllocDeviceMem, (void* data, void* handle, uint32_t attribs, uint32_t
     arrput(map, new);
 
     if (!strcmp(addr_to_name((*info)->sDevVAddr), "VertexShaderCode") && ((*info)->sDevVAddr == 0xfc00000)) {
-        monitor_cpu_addr = (uint32_t)(*info)->pvLinAddr;
-        mprotect((void*)(*info)->pvLinAddr, size, PROT_READ);
-//        addr_test = (uint32_t)(*info)->pvLinAddr + 100 * 8;
-    } else if (!strcmp(addr_to_name((*info)->sDevVAddr), "CacheCoherent") && ((*info)->sDevVAddr == 0xd803000)) {
+//    if (!strcmp(addr_to_name((*info)->sDevVAddr), "KernelCode")/* && ((*info)->sDevVAddr == 0xe429000)*/) {
+        printf("setting breakpoint %x\n", size);
+        add_watchpoint((*info)->pvLinAddr, size, gpu_mem_prewrite, gpu_mem_postwrite);
+   } else if (!strcmp(addr_to_name((*info)->sDevVAddr), "CacheCoherent") && ((*info)->sDevVAddr == 0xd803000)) {
         PVRSRV_CLIENT_MEM_INFO* nInfo = malloc(0x8000);
         real_PVRSRVAllocDeviceMem(data, handle, attribs, 12, align, &nInfo);
         printf("cache coherent hook, new allocation: %p %x\n", nInfo->pvLinAddr, nInfo->sDevVAddr);
@@ -326,9 +325,30 @@ HOOK(PVRSRVAllocDeviceMem, (void* data, void* handle, uint32_t attribs, uint32_t
     return ret;
 });
 
+void* c_memcpy(const void *restrict dest, const void *restrict src, size_t n) {
+    // Typecast src and dest addresses to (char *)
+    char *csrc = (char *)src;
+    char *cdest = (char *)dest;
+     
+    // Copy contents of src[] to dest[]
+    for (size_t i = 0; i<n; i++)
+        cdest[i] = csrc[i];
+
+    return (void*)dest;
+}
+
+HOOK(memset, (void *s, int c, size_t n), void*, {
+    unsigned char* p=s;
+    while(n--) {
+        *p++ = (unsigned char)c;
+    }
+    return s;
+})
+
 HOOK(memcpy, (void *restrict dest, const void *restrict src, size_t n), void*, {
     uintptr_t d = (uintptr_t)dest;
 
+    bool found = false;
     for (int i = 0; i < arrlen(map); i++) {
         Allocation cur = map[i];
         if (IN_RANGE(d, ((uintptr_t)cur.cpu_addr), cur.size)) {
@@ -349,7 +369,14 @@ HOOK(memcpy, (void *restrict dest, const void *restrict src, size_t n), void*, {
         }
     }
 
-    return real_memcpy(dest, src, n);;
+
+    if (!found) {
+        printf("external memcpy\n");
+    }
+
+    void* res = c_memcpy(dest, src, n);
+
+    return res;
 })
 
 static int (*main_orig)(int, char **, char **);
@@ -360,7 +387,7 @@ int main_hook(int argc, char **argv, char **envp) {
     struct sigaction act;
     memset(&act, 0, sizeof(struct sigaction));
     sigemptyset(&act.sa_mask);
-    act.sa_sigaction = handler;
+    act.sa_sigaction = sev_handler;
     act.sa_flags = SA_SIGINFO | SA_ONSTACK;
     sigaction(SIGSEGV, &act, NULL);
 
