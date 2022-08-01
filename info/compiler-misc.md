@@ -2,22 +2,7 @@
 
 These are not meant to be an exact specification of the ISA but more along the lines of a log of the order in which i found things
 
-### Registers
-There seem to be 11 different kinds of "registers", so far these have been identified
-
-- r#  : temporary
-- o#  : output
-- pa# : primary attribute
-- sa# : secondary attribute
-- c#  : probably (float?) constant
-- i#  : floating-point internal register
-
-Immediates are written as #num
-
-### Prelude
-There seems to be a prelude to vertex shaders that's approximately 81 instructions in size, it doesn't vary with any shader change i've done so far
-it seems to mostly involve writing to output register 0 from the primitive attribute register 0 and "emitst" repeated over and over, it's followed a register write
-to pa3 and pa2 wiuth floating point values 1.0 and 0.0, at this point the actual shader code seems to have any effect.
+The vertex shader memory area has 82 instructions which is actually written to it before any shader code is even compiled.
 
 ### Shader code
 
