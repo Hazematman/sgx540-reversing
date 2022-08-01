@@ -115,7 +115,7 @@ typedef struct Watchpoint {
     size_t len;
     //instruction to restore
     uint16_t instr;
-    uint32_t bp_addr;
+    uintptr_t bp_addr;
     //address that caused the last fault
     uint32_t addr;
     //last offset from the base of a library
@@ -172,7 +172,7 @@ static void sev_handler(int, siginfo_t* siginfo, void* uap) {
                 c_instruction = (uint16_t*)((uintptr_t)context->uc_mcontext.arm_pc + 2);
             }
             watchpoints[i].instr = (*c_instruction);
-            watchpoints[i].bp_addr = (uint32_t)(c_instruction);
+            watchpoints[i].bp_addr = (uintptr_t)(c_instruction);
             watchpoints[i].addr = addr;
             watchpoints[i].addr_off = off;
             watchpoints[i].lib_name = lib;
@@ -309,7 +309,7 @@ HOOK(PVRSRVAllocDeviceMem, (void* data, void* handle, uint32_t attribs, uint32_t
     if (!strcmp(addr_to_name((*info)->sDevVAddr), "VertexShaderCode") && ((*info)->sDevVAddr == 0xfc00000)) {
 //    if (!strcmp(addr_to_name((*info)->sDevVAddr), "KernelCode")/* && ((*info)->sDevVAddr == 0xe429000)*/) {
         printf("setting breakpoint %x\n", size);
-        add_watchpoint((*info)->pvLinAddr, size, gpu_mem_prewrite, gpu_mem_postwrite);
+        add_watchpoint((uintptr_t)(*info)->pvLinAddr, size, gpu_mem_prewrite, gpu_mem_postwrite);
    } else if (!strcmp(addr_to_name((*info)->sDevVAddr), "CacheCoherent") && ((*info)->sDevVAddr == 0xd803000)) {
         PVRSRV_CLIENT_MEM_INFO* nInfo = malloc(0x8000);
         real_PVRSRVAllocDeviceMem(data, handle, attribs, 12, align, &nInfo);
