@@ -132,6 +132,12 @@ static Watchpoint* watchpoints;
 static int num_changes = 0;
 static size_t addr_test = 0;
 
+/*
+ * TODO:
+ * There's currently a bug with this when combined with the `it` instruction, which is why at the moment we reimplement
+ * memcpy and memset (this will be useful later anyway).
+ */
+
 static void sev_handler(int, siginfo_t* siginfo, void* uap) {
     uintptr_t addr = (uintptr_t)siginfo->si_addr;
     ucontext_t *context = (ucontext_t *)uap;
