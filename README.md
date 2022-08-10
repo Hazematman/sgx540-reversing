@@ -1,13 +1,15 @@
-PowerVR SGX540 dumping
+PowerVR SGX540 Reverse Engineering
 =========
 This repository contains a set of tools and reverse engineered information on the PowerVR SGX540 gpu found in the Galaxy Tab 2 7.0 P3110 by samsung.
 
+Note that all of the information container here has been derived exclusively from binaries and code published officially by Imagination Technologies that are publicly available.
+
 Directory structure:
 
-`Android/` contains various analysis tools (including shader dumping tools) for android, they are mostly historial but might be useful again at some point
-`hook-postmarket/` contains the latest analysis tools for postmarketos, at the moment they are able to analyse the gpu initialization and dump/modify shaders through a mostly complete armv7 debugger backend and some notes about my findings
-`asm/` contains a disassembler and an assembler for the architecture, the disassembler is for now just done using hijacked official imgtech binaries (not provided in this repo)
-`info/` contains general information about the drivers and the architecture
+- `Android/` contains various analysis tools (including shader dumping tools) for android, they are mostly historial but might be useful again at some point
+- `hook-postmarket/` contains the latest analysis tools for postmarketos, at the moment they are able to analyse the gpu initialization and dump/modify shaders through a mostly complete armv7 debugger backend and some notes about my findings
+- `asm/` contains a disassembler and an assembler for the architecture, the disassembler is for now just done using hijacked official imgtech binaries (not provided in this repo)
+- `info/` contains general information about the drivers and the architecture
 
 Checklist:
 
