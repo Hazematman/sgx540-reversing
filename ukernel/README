@@ -3,3 +3,7 @@ This directory contains dumps and disassembly for the SGX microkernel (only USE 
 Note that there are a few "patch points" that seem to be marked by the constant 0xDEADBEEF that are written to by pvrsrvinit (or rather libsrv_init)
 
 While loading the ukernel it seems like the userspace library builds up a "script" that writes to hardware registers later in kernelspace, the PDS code for the kernel is for now unknown.
+
+Some new findings point to PDS being a "programmable data sequencer" unit, the `pds_init` binary is patched with the address of the main microkernel binary. It's likely that it is the first piece of code that runs on the GPU and it is responsible for starting the actual bulk of the firmware, which is still in USE.
+
+Based on the length it seems there are a few other small pds binaries that are loaded and patched, but their purpose remains unknown.
