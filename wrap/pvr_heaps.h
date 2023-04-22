@@ -3,6 +3,7 @@
 
 /* Defines copied from linux kernel */
 #define SUPPORT_LARGE_GENERAL_HEAP
+#define SGX_KERNEL_DATA_HEAP_OFFSET		0x00000000
 
 #if defined(SUPPORT_SGX_GENERAL_MAPPING_HEAP)
 	#define SGX_GENERAL_MAPPING_HEAP_BASE		 0x00001000

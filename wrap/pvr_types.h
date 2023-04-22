@@ -2,12 +2,24 @@
 #define PVR_TYPES_H
 #include <stdint.h>
 
+#define SUPPORT_SGX_NEW_STATUS_VALS
+#define SGX_MAX_TA_STATUS_VALS	32
+#define SGX_MAX_3D_STATUS_VALS	4
+/* sync info structure array size */
+#define SGX_MAX_SRC_SYNCS_TA				32
+#define SGX_MAX_DST_SYNCS_TA				1
+/* note: only one dst sync is supported by the 2D paths */
+#define SGX_MAX_SRC_SYNCS_TQ				6
+#define SGX_MAX_DST_SYNCS_TQ				2
+
+
 typedef uint32_t IMG_UINT32;
 typedef uint64_t IMG_UINT64;
 typedef void IMG_VOID;
 typedef void *IMG_PVOID;
 typedef void *IMG_HANDLE;
 typedef size_t IMG_SIZE_T;
+typedef uintptr_t IMG_UINTPTR_T;
 
 typedef	enum tag_img_bool
 {
@@ -501,5 +513,161 @@ typedef struct PVRSRV_BRIDGE_OUT_MAP_DEVICECLASS_MEMORY_TAG
 
 } PVRSRV_BRIDGE_OUT_MAP_DEVICECLASS_MEMORY;
 
+typedef struct PVRSRV_BRIDGE_OUT_ALLOCDEVICEMEM_TAG
+{
+	PVRSRV_ERROR            eError;
+	PVRSRV_KERNEL_MEM_INFO	*psKernelMemInfo;
+	PVRSRV_CLIENT_MEM_INFO  sClientMemInfo;
+	PVRSRV_CLIENT_SYNC_INFO sClientSyncInfo;
+
+} PVRSRV_BRIDGE_OUT_ALLOCDEVICEMEM;
+
+typedef struct PVRSRV_BRIDGE_IN_MHANDLE_TO_MMAP_DATA_TAG
+{
+	IMG_UINT32			ui32BridgeFlags; /* Must be first member of structure */
+	IMG_HANDLE			hMHandle;	 /* Handle associated with the memory that needs to be mapped */
+} PVRSRV_BRIDGE_IN_MHANDLE_TO_MMAP_DATA;
+
+typedef struct PVRSRV_BRIDGE_OUT_MHANDLE_TO_MMAP_DATA_TAG
+{
+    PVRSRV_ERROR		eError;
+
+    /* This is a the offset you should pass to mmap(2) so that
+     * the driver can look up the full details for the mapping
+     * request. */
+     IMG_UINTPTR_T		uiMMapOffset;
+
+    /* This is the byte offset you should add to the mapping you
+     * get from mmap */
+    IMG_UINTPTR_T		uiByteOffset;
+
+    /* This is the real size of the mapping that will be created
+     * which should be passed to mmap _and_ munmap. */
+    IMG_SIZE_T 			uiRealByteSize;
+
+    /* User mode address associated with mapping */
+    IMG_UINTPTR_T       uiUserVAddr;
+
+} PVRSRV_BRIDGE_OUT_MHANDLE_TO_MMAP_DATA;
+
+typedef struct PVRSRV_BRIDGE_OUT_MAP_DEV_MEMORY_TAG
+{
+	PVRSRV_ERROR            eError;
+	PVRSRV_KERNEL_MEM_INFO	*psDstKernelMemInfo;
+	PVRSRV_CLIENT_MEM_INFO  sDstClientMemInfo;
+	PVRSRV_CLIENT_SYNC_INFO sDstClientSyncInfo;
+
+}PVRSRV_BRIDGE_OUT_MAP_DEV_MEMORY;
+
+typedef enum _SGXMKIF_CMD_TYPE_
+{
+	SGXMKIF_CMD_TA				= 0,
+	SGXMKIF_CMD_TRANSFER		= 1,
+	SGXMKIF_CMD_2D				= 2,
+	SGXMKIF_CMD_POWER			= 3,
+	SGXMKIF_CMD_CONTEXTSUSPEND	= 4,
+	SGXMKIF_CMD_CLEANUP			= 5,
+	SGXMKIF_CMD_GETMISCINFO		= 6,
+	SGXMKIF_CMD_PROCESS_QUEUES	= 7,
+	SGXMKIF_CMD_DATABREAKPOINT	= 8,
+	SGXMKIF_CMD_SETHWPERFSTATUS	= 9,
+ 	SGXMKIF_CMD_FLUSHPDCACHE	= 10,
+ 	SGXMKIF_CMD_MAX				= 11,
+
+	SGXMKIF_CMD_FORCE_I32   	= -1,
+
+} SGXMKIF_CMD_TYPE;
+
+typedef struct _SGXMKIF_COMMAND_
+{
+	IMG_UINT32				ui32ServiceAddress;		/*!< address of the USE command handler */
+	IMG_UINT32				ui32CacheControl;		/*!< See SGXMKIF_CC_INVAL_* */
+	IMG_UINT32				ui32Data[6];			/*!< array of other command control words */
+} SGXMKIF_COMMAND;
+
+typedef struct _CTL_STATUS_
+{
+	IMG_DEV_VIRTADDR	sStatusDevAddr;
+	IMG_UINT32			ui32StatusValue;
+} CTL_STATUS;
+
+typedef struct _SGX_INTERNEL_STATUS_UPDATE_
+{
+	CTL_STATUS				sCtlStatus;
+	IMG_HANDLE				hKernelMemInfo;
+} SGX_INTERNEL_STATUS_UPDATE;
+
+typedef struct _SGX_CCB_KICK_
+{
+	SGXMKIF_COMMAND		sCommand;
+	IMG_HANDLE	hCCBKernelMemInfo;
+
+	IMG_UINT32	ui32NumDstSyncObjects;
+	IMG_HANDLE	hKernelHWSyncListMemInfo;
+
+	/* DST syncs */
+	IMG_HANDLE	*pahDstSyncHandles;
+
+	IMG_UINT32	ui32NumTAStatusVals;
+	IMG_UINT32	ui32Num3DStatusVals;
+
+#if defined(SUPPORT_SGX_NEW_STATUS_VALS)
+	SGX_INTERNEL_STATUS_UPDATE	asTAStatusUpdate[SGX_MAX_TA_STATUS_VALS];
+	SGX_INTERNEL_STATUS_UPDATE	as3DStatusUpdate[SGX_MAX_3D_STATUS_VALS];
+#else
+	IMG_HANDLE	ahTAStatusSyncInfo[SGX_MAX_TA_STATUS_VALS];
+	IMG_HANDLE	ah3DStatusSyncInfo[SGX_MAX_3D_STATUS_VALS];
+#endif
+
+	IMG_BOOL	bFirstKickOrResume;
+#if defined(NO_HARDWARE) || defined(PDUMP)
+	IMG_BOOL	bTerminateOrAbort;
+#endif
+	IMG_BOOL	bLastInScene;
+
+	/* CCB offset of data structure associated with this kick */
+	IMG_UINT32	ui32CCBOffset;
+
+#if defined(SUPPORT_SGX_GENERALISED_SYNCOBJECTS)
+	/* SRC and DST syncs */
+	IMG_UINT32	ui32NumTASrcSyncs;
+	IMG_HANDLE	ahTASrcKernelSyncInfo[SGX_MAX_TA_SRC_SYNCS];
+	IMG_UINT32	ui32NumTADstSyncs;
+	IMG_HANDLE	ahTADstKernelSyncInfo[SGX_MAX_TA_DST_SYNCS];
+	IMG_UINT32	ui32Num3DSrcSyncs;
+	IMG_HANDLE	ah3DSrcKernelSyncInfo[SGX_MAX_3D_SRC_SYNCS];
+#else
+	/* SRC syncs */
+	IMG_UINT32	ui32NumSrcSyncs;
+	IMG_HANDLE	ahSrcKernelSyncInfo[SGX_MAX_SRC_SYNCS_TA];
+#endif
+
+	/* TA/3D dependency data */
+	IMG_BOOL	bTADependency;
+	IMG_HANDLE	hTA3DSyncInfo;
+
+	IMG_HANDLE	hTASyncInfo;
+	IMG_HANDLE	h3DSyncInfo;
+#if defined(PDUMP)
+	IMG_UINT32	ui32CCBDumpWOff;
+#endif
+#if defined(NO_HARDWARE)
+	IMG_UINT32	ui32WriteOpsPendingVal;
+#endif
+	IMG_HANDLE	hDevMemContext;
+	IMG_DEV_VIRTADDR	sHWRTDataSetDevAddr;
+	IMG_DEV_VIRTADDR	sHWRTDataDevAddr;
+	IMG_UINT32			ui32FrameNum;
+#if defined(SUPPORT_PVRSRV_ANDROID_SYSTRACE)	
+	IMG_BOOL	bIsFirstKick;
+#endif
+} SGX_CCB_KICK;
+
+typedef struct PVRSRV_BRIDGE_IN_DOKICK_TAG
+{
+	IMG_UINT32				ui32BridgeFlags; /* Must be first member of structure */
+	IMG_HANDLE				hDevCookie;
+	SGX_CCB_KICK			sCCBKick;
+}PVRSRV_BRIDGE_IN_DOKICK;
 
 #endif

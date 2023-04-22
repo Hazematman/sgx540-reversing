@@ -138,7 +138,9 @@ static size_t addr_test = 0;
  * memcpy and memset (this will be useful later anyway).
  */
 
-static void sev_handler(int, siginfo_t* siginfo, void* uap) {
+static void sev_handler(int unused, siginfo_t* siginfo, void* uap) {
+    printf("In handler\n");
+#if 0
     uintptr_t addr = (uintptr_t)siginfo->si_addr;
     ucontext_t *context = (ucontext_t *)uap;
     printf("fault at address %p\n", siginfo->si_addr);
@@ -196,9 +198,11 @@ static void sev_handler(int, siginfo_t* siginfo, void* uap) {
 
     printf("real segmentation fault\n");
     exit(1);
+#endif
 }
 
-static void trap_handler(int, siginfo_t*, void* uap) {
+static void trap_handler(int unused, siginfo_t* u2, void* uap) {
+#if 0
     ucontext_t *context = (ucontext_t *)uap;
     uint32_t addr = (uint32_t)(context->uc_mcontext.arm_pc);
 
@@ -218,9 +222,10 @@ static void trap_handler(int, siginfo_t*, void* uap) {
             break;
         }
     }
+#endif
 }
 
-static int iterate_callback (struct dl_phdr_info *info, size_t, void *) {
+static int iterate_callback (struct dl_phdr_info *info, size_t u1, void *u2) {
     size_t last_addr = 0;
 
     for (int i = 0; i < info->dlpi_phnum; i++) {
@@ -315,7 +320,7 @@ HOOK(PVRSRVAllocDeviceMem, (void* data, void* handle, uint32_t attribs, uint32_t
     if (!strcmp(addr_to_name((*info)->sDevVAddr), "VertexShaderCode") && ((*info)->sDevVAddr == 0xfc00000)) {
 //    if (!strcmp(addr_to_name((*info)->sDevVAddr), "KernelCode")/* && ((*info)->sDevVAddr == 0xe429000)*/) {
         printf("setting breakpoint %x\n", size);
-        add_watchpoint((uintptr_t)(*info)->pvLinAddr, size, gpu_mem_prewrite, gpu_mem_postwrite);
+        //add_watchpoint((uintptr_t)(*info)->pvLinAddr, size, gpu_mem_prewrite, gpu_mem_postwrite);
    } else if (!strcmp(addr_to_name((*info)->sDevVAddr), "CacheCoherent") && ((*info)->sDevVAddr == 0xd803000)) {
         PVRSRV_CLIENT_MEM_INFO* nInfo = malloc(0x8000);
         real_PVRSRVAllocDeviceMem(data, handle, attribs, 12, align, &nInfo);
@@ -415,6 +420,7 @@ int main_hook(int argc, char **argv, char **envp) {
     sigemptyset(&set);
     pthread_sigmask(SIG_BLOCK, &set, NULL);
 
+    printf("=============================================================================\nHooked main\n");
     return main_orig(argc, argv, envp);
 }
 

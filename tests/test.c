@@ -23,6 +23,7 @@
         printf("%s: failed: %d", #x, err); \
         assert(false); \
     } \
+    printf(">>> done %s\n", #x); \
 }
 
 #define GCHK(x) { \
@@ -33,9 +34,14 @@
         printf("%s: failed: %d", #x, err); \
         assert(false); \
     } \
+    printf(">>> done %s\n", #x); \
 }
 
-#define FLOG(x) printf(">>> %s\n", #x), x
+#define FLOG(x) { \
+    printf(">>> %s\n", #x); \
+    x; \
+    printf(">>> done %s\n", #x); \
+}
 
 #ifdef EGL
 static EGLint const config_attribute_list[] = {
@@ -161,7 +167,7 @@ int main(int argc, char *argv[]) {
 #endif 
     open_x11(argc, argv);
 
-    GCHK(glClearColor(1.0f, 0.0f, 0.0f, 0.0f));
+    GCHK(glClearColor(0.0f, 0.0f, 0.0f, 1.0f));
     GCHK(glViewport(0, 0, width, height));
     GCHK(glScissor(0, 0, width, height));
     GCHK(glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT));
