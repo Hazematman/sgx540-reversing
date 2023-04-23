@@ -13,6 +13,8 @@
 
 #include <asm-generic/ioctl.h>
 
+#include <xf86drm.h>
+
 #define TRANSFER_QUEUE
 #define SUPPORT_MEMINFO_IDS
 #include "pvr_types.h"
@@ -56,10 +58,10 @@ static const char *pvr_heap_names[] = {
 };
 
 enum pvr_ioctl {
-    DRM_IOCTL_VERSION = 0x00,
-    DRM_IOCTL_GET_UNIQUE = 0x01,
-    DRM_IOCTL_GET_MAGIC = 0x02,
-    DRM_IOCTL_SET_VERSION = 0x07,
+    //DRM_IOCTL_VERSION = 0x00,
+    //DRM_IOCTL_GET_UNIQUE = 0x01,
+    //DRM_IOCTL_GET_MAGIC = 0x02,
+    //DRM_IOCTL_SET_VERSION = 0x07,
     PVR_DRM_SRVKM_CMD = DRM_COMMAND_BASE + 0x00,
     PVR_DRM_IS_MASTER_CMD = DRM_COMMAND_BASE + 0x03,
 };
@@ -73,7 +75,7 @@ static struct mem_entry {
     void *data;
     PVRSRV_CLIENT_MEM_INFO mem_info;
     PVRSRV_BRIDGE_OUT_MHANDLE_TO_MMAP_DATA mmap_data[2];
-} mem_trackings[MAX_BUFFERS_TO_TRACK];
+} mem_trackings[MAX_BUFFERS_TO_TRACK], *last_mem_entry = NULL;
 
 static struct fd_info {
     bool open;
@@ -104,21 +106,19 @@ static enum pvr_heap get_heap(IMG_DEV_VIRTADDR vaddr) {
     }
 }
 
-static void clear_mem(int fd, PVRSRV_BRIDGE_OUT_MHANDLE_TO_MMAP_DATA *mmap_data) {
-    /* If we use this mmap data it causes problems */
-    /* its likely that its only valid for one mapping */
-#if 0
-    printf("MMAP user data %p\n", mmap_data->uiUserVAddr);
-    void *data = syscall(SYS_mmap2, mmap_data->uiUserVAddr, mmap_data->uiRealByteSize, 
-                        PROT_READ | PROT_WRITE,MAP_SHARED, fd, mmap_data->uiMMapOffset);
-    if(!data) {
-        printf("Mapping memory failed!!!!!\n");
-        assert(false);
+static void clear_mem(struct mem_entry *mem) {
+    enum pvr_heap heap = get_heap(mem->mem_info.sDevVAddr);
+    bool valid_heap = heap == PVR_HEAP_VERTEX_SHADER
+                      || heap == PVR_HEAP_PIXEL_SHADER
+                      || heap == PVR_HEAP_PDS_VERTEX_CODE_DATA
+                      || heap == PVR_HEAP_PDS_PIXEL_CODE_DATA
+                      //|| heap == PVR_HEAP_GENERAL
+                      || heap == PVR_HEAP_SYNC_INFO;
+    IMG_HANDLE handle = mem->mem_info.hKernelMemInfo;
+    bool is_special_heap = handle == 0x14;
+    if(valid_heap || is_special_heap) {
+        memset(mem->data, 0x00, mem->mem_info.uAllocSize);
     }
-
-    memset(data, 0x00, mmap_data->uiRealByteSize);
-    munmap(data, mmap_data->uiRealByteSize);
-#endif
 }
 
 static void track_buffer(PVRSRV_CLIENT_MEM_INFO *mem_info, bool disp_mem) {
@@ -129,7 +129,10 @@ static void track_buffer(PVRSRV_CLIENT_MEM_INFO *mem_info, bool disp_mem) {
             memcpy(&mem->mem_info, mem_info, sizeof(*mem_info));
             mem->in_use = true;
             mem->disp_mem = disp_mem;
-            get_heap(mem_info->sDevVAddr);
+
+            printf("Allocated %x bytes of memory at %p : %x (%s)\n", 
+                   mem_info->uAllocSize, mem_info->pvLinAddr, mem_info->sDevVAddr.uiAddr, 
+                   pvr_heap_names[get_heap(mem_info->sDevVAddr)]);
             if(disp_mem) {
                 /* Override handle for tracking system */
                 /* TODO this might not be the best approach, modify it causes problems with
@@ -158,20 +161,12 @@ static void add_mmap_data(int fd, IMG_HANDLE handle, PVRSRV_BRIDGE_OUT_MHANDLE_T
         if(mem->in_use && !mem->has_mmap[0] && primary_handle_valid) {
             memcpy(&mem->mmap_data[0], mmap_data, sizeof(*mmap_data));
             mem->has_mmap[0] = true;
-            enum pvr_heap heap = get_heap(mem->mem_info.sDevVAddr);
-            if(heap != PVR_HEAP_KERNEL_DATA) {
-                //printf("Clearing %s\n", pvr_heap_names[heap]);
-                clear_mem(fd, &mem->mmap_data[0]);
-            }
+            last_mem_entry = mem;
             return;
         } else if(mem->in_use && !mem->has_mmap[1] && secondary_handle_valid) {
             memcpy(&mem->mmap_data[1], mmap_data, sizeof(*mmap_data));
             mem->has_mmap[1] = true;
-            enum pvr_heap heap = get_heap(mem->mem_info.sDevVAddr);
-            if(heap != PVR_HEAP_KERNEL_DATA) {
-                //printf("Clearing %s\n", pvr_heap_names[heap]);
-                clear_mem(fd, &mem->mmap_data[1]);
-            }
+            last_mem_entry = mem;
             return;
         }
     }
@@ -204,7 +199,7 @@ static void dump_tracked_buffers() {
     for(int i = 0; i < track_arr_size; i++) {
         struct mem_entry *mem = &mem_trackings[i];
         if(mem->in_use && mem->data) {
-            sprintf(str_buf, "buffers/0x%x_%s.bin", mem->mem_info.hKernelMemInfo, 
+            sprintf(str_buf, "buffers/0x%x_%s.bin", (uintptr_t)mem->mem_info.hKernelMemInfo, 
                     pvr_heap_names[get_heap(mem->mem_info.sDevVAddr)]); 
             FILE *fp = fopen(str_buf, "wb");
             if(!fp) {
@@ -225,7 +220,13 @@ static void patch_buffers() {
             float *clear_color = ((uint8_t*)mem->data) + 0xac;
             clear_color[0] = 1.0f;
             clear_color[1] = 0.5f;
+        } 
+#if 0
+        else if(mem->in_use && mem->mem_info.hKernelMemInfo == 0x14) {
+            uint32_t *cmds = ((uint8_t*)mem->data) + 0x00;
+            cmds[0]= 0xDEADBEEF;
         }
+#endif
     }
 }
 
@@ -327,6 +328,12 @@ static bool pvrsrv_ioctl(PVRSRV_BRIDGE_PACKAGE *bridge_package) {
                 printf("Tracking %d buffers\n", num_buffers); 
                 dump_tracked_buffers();
                 patch_buffers();
+                
+                PVRSRV_BRIDGE_IN_DOKICK *ccb = bridge_package->pvParamIn; 
+                printf("CCB offset 0x%x\n", ccb->sCCBKick.ui32CCBOffset);
+                printf("Cookie %p\n", ccb->hDevCookie);
+                printf("Dev Mem Context %p\n", ccb->sCCBKick.hDevMemContext);
+                printf("Kernel mem handle %p\n", ccb->sCCBKick.hCCBKernelMemInfo);
             }
             break;
         case PVRSRV_BRIDGE_SGX_SET_RENDER_CONTEXT_PRIORITY:
@@ -369,19 +376,25 @@ static bool pvrsrv_ioctl(PVRSRV_BRIDGE_PACKAGE *bridge_package) {
 }
 
 static bool pvr_ioctl_pre(int fd, int request, void *ptr) {
-    //printf("ioctl is 0x%x\n", _IOC_NR(request));
     int ioctl_nr = _IOC_NR(request);
     switch(ioctl_nr) {
-        case DRM_IOCTL_VERSION:
-        case DRM_IOCTL_GET_MAGIC:
-        case DRM_IOCTL_GET_UNIQUE:
-        case DRM_IOCTL_SET_VERSION:
-            /* TODO figure out if this needs to be handled */
+        case _IOC_NR(DRM_IOCTL_VERSION):
+            printf(">>> ioctl(DRM_IOCTL_VERSION)\n");
+            break;
+        case _IOC_NR(DRM_IOCTL_GET_MAGIC):
+            printf(">>> ioctl(DRM_IOCTL_GET_MAGIC)\n");
+            break;
+        case _IOC_NR(DRM_IOCTL_GET_UNIQUE):
+            printf(">>> ioctl(DRM_IOCTL_GET_UNIQUE)\n");
+            break;
+        case _IOC_NR(DRM_IOCTL_SET_VERSION):
+            printf(">>> ioctl(DRM_IOCTL_SET_VERSION)\n");
             break;
         case PVR_DRM_SRVKM_CMD: 
             return pvrsrv_ioctl(ptr);
             break;
         case PVR_DRM_IS_MASTER_CMD:
+            printf(">>> ioctl(PVR_DRM_IS_MASTER_CMD)\n");
             /* From KMD source code this seems to always return 0 */
             break;
         default:
@@ -461,7 +474,49 @@ int openat(int dirfd, const char *pathname, int flags, ...) {
     return orig_openat(dirfd, pathname, flags);
 }
 
-#if 1
+long syscall(long number, ...) {
+    PROLOG(syscall);
+    if(number == SYS_mmap2) {
+        va_list args;
+        va_start(args, number);
+        unsigned long addr = va_arg(args, unsigned long);
+        unsigned long length = va_arg(args, unsigned long);
+        unsigned long prot = va_arg(args, unsigned long);
+        unsigned long flags = va_arg(args, unsigned long);
+        unsigned long fd = va_arg(args, unsigned long);
+        unsigned long pgoffset = va_arg(args, unsigned long);
+        long ret = orig_syscall(number, addr, length, prot, flags, fd, pgoffset);
+        printf("mmap2 called with 0x%lx\n", ret);
+        if(!last_mem_entry) {
+            printf("last memory entry is null!\n");
+            assert(false);
+        }
+        last_mem_entry->data = (void*)(uintptr_t)ret;
+        clear_mem(last_mem_entry);
+        return ret;
+    } else {
+        printf("Unhandled syscall 0x%lx\n", number);
+    }
+
+    assert(false);
+    return 0;
+}
+
+#if 0
+drmVersionPtr drmGetVersion(int fd) {
+    PROLOG(drmGetVersion);
+    printf(">>> drmGetVersion(%d)\n", fd);
+    return orig_drmGetVersion(fd);
+}
+
+int drmSetInterfaceVersion(int fd, drmSetVersion *version) {
+    PROLOG(drmSetInterfaceVersion);
+    printf(">>> drmSetInterfaceVersion(%d, ...)", fd);
+    return orig_drmSetInterfaceVersion(fd);
+}
+#endif
+
+#if 0
 /* We need to hijack this function to get memory mappings since the pvr driver
  * calls `mmap2` through `syscall` meaning we can't hijack it with LD_PRELOAD
  * This function does not get every memory mapping though

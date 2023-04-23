@@ -167,9 +167,9 @@ int main(int argc, char *argv[]) {
 #endif 
     open_x11(argc, argv);
 
-    GCHK(glClearColor(0.0f, 0.0f, 0.0f, 1.0f));
     GCHK(glViewport(0, 0, width, height));
     GCHK(glScissor(0, 0, width, height));
+    GCHK(glClearColor(0.0f, 0.0f, 0.0f, 1.0f));
     GCHK(glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT));
 
 #if 0
@@ -179,10 +179,13 @@ int main(int argc, char *argv[]) {
         return 0;
     }
 #endif
-    //GCHK(glFinish());
     //GCHK(glReadPixels(0, 0, width, height, GL_RGB, GL_UNSIGNED_BYTE, data));
+    //GCHK(glClearColor(0.0f, 0.0f, 0.0f, 1.0f));
+    //GCHK(glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT));
+
 
     FLOG(glXSwapBuffers(dpy, win));
+    //for(;;) {};
 
 #if 0
     FILE *fp = fopen("out.ppm", "w");
