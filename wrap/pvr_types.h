@@ -12,6 +12,8 @@
 #define SGX_MAX_SRC_SYNCS_TQ				6
 #define SGX_MAX_DST_SYNCS_TQ				2
 
+#define PVRSRV_MAX_DEVICES		16	/*!< Largest supported number of devices on the system */
+
 
 typedef uint32_t IMG_UINT32;
 typedef uint64_t IMG_UINT64;
@@ -20,6 +22,7 @@ typedef void *IMG_PVOID;
 typedef void *IMG_HANDLE;
 typedef size_t IMG_SIZE_T;
 typedef uintptr_t IMG_UINTPTR_T;
+typedef char IMG_CHAR;
 
 typedef	enum tag_img_bool
 {
@@ -265,6 +268,41 @@ typedef enum _PVRSRV_ERROR_
 
 } PVRSRV_ERROR;
 
+typedef enum _PVRSRV_DEVICE_TYPE_
+{
+	PVRSRV_DEVICE_TYPE_UNKNOWN			= 0 ,
+	PVRSRV_DEVICE_TYPE_MBX1				= 1 ,
+	PVRSRV_DEVICE_TYPE_MBX1_LITE		= 2 ,
+
+	PVRSRV_DEVICE_TYPE_M24VA			= 3,
+	PVRSRV_DEVICE_TYPE_MVDA2			= 4,
+	PVRSRV_DEVICE_TYPE_MVED1			= 5,
+	PVRSRV_DEVICE_TYPE_MSVDX			= 6,
+
+	PVRSRV_DEVICE_TYPE_SGX				= 7,
+
+	PVRSRV_DEVICE_TYPE_VGX				= 8,
+
+	/* 3rd party devices take ext type */
+	PVRSRV_DEVICE_TYPE_EXT				= 9,
+
+    PVRSRV_DEVICE_TYPE_LAST             = 9,
+
+	PVRSRV_DEVICE_TYPE_FORCE_I32		= 0x7fffffff
+
+} PVRSRV_DEVICE_TYPE;
+
+typedef enum _PVRSRV_DEVICE_CLASS_
+{
+	PVRSRV_DEVICE_CLASS_3D				= 0 ,
+	PVRSRV_DEVICE_CLASS_DISPLAY			= 1 ,
+	PVRSRV_DEVICE_CLASS_BUFFER			= 2 ,
+	PVRSRV_DEVICE_CLASS_VIDEO			= 3 ,
+
+	PVRSRV_DEVICE_CLASS_FORCE_I32 		= 0x7fffffff
+
+} PVRSRV_DEVICE_CLASS;
+
 typedef enum _PVRSRV_MEMTYPE_
 {
 	PVRSRV_MEMTYPE_UNKNOWN		= 0,
@@ -297,6 +335,16 @@ typedef struct _IMG_SYS_PHYADDR
 	IMG_UINT64 uiAddr;
 #endif
 } IMG_SYS_PHYADDR;
+
+typedef struct _PVRSRV_DEVICE_IDENTIFIER_
+{
+	PVRSRV_DEVICE_TYPE		eDeviceType;		/*!< Identifies the type of the device */
+	PVRSRV_DEVICE_CLASS		eDeviceClass;		/*!< Identifies more general class of device - display/3d/mpeg etc */
+	IMG_UINT32				ui32DeviceIndex;	/*!< Index of the device within the system */
+	IMG_CHAR				*pszPDumpDevName;	/*!< Pdump memory bank name */
+	IMG_CHAR				*pszPDumpRegName;	/*!< Pdump register bank name */
+
+} PVRSRV_DEVICE_IDENTIFIER;
 
 typedef struct _PVRSRV_SYNC_DATA_
 {
@@ -559,6 +607,34 @@ typedef struct PVRSRV_BRIDGE_OUT_MAP_DEV_MEMORY_TAG
 
 }PVRSRV_BRIDGE_OUT_MAP_DEV_MEMORY;
 
+typedef enum _SGX_MISC_INFO_REQUEST_
+{
+	SGX_MISC_INFO_REQUEST_CLOCKSPEED = 0,
+	SGX_MISC_INFO_REQUEST_CLOCKSPEED_SLCSIZE,
+	SGX_MISC_INFO_REQUEST_SGXREV,
+	SGX_MISC_INFO_REQUEST_DRIVER_SGXREV,
+#if defined(SUPPORT_SGX_EDM_MEMORY_DEBUG)
+	SGX_MISC_INFO_REQUEST_MEMREAD,
+	SGX_MISC_INFO_REQUEST_MEMCOPY,
+#endif /* SUPPORT_SGX_EDM_MEMORY_DEBUG */
+	SGX_MISC_INFO_REQUEST_SET_HWPERF_STATUS,
+#if defined(SGX_FEATURE_DATA_BREAKPOINTS)
+	SGX_MISC_INFO_REQUEST_SET_BREAKPOINT,
+	SGX_MISC_INFO_REQUEST_POLL_BREAKPOINT,
+	SGX_MISC_INFO_REQUEST_RESUME_BREAKPOINT,
+#endif /* SGX_FEATURE_DATA_BREAKPOINTS */
+	SGX_MISC_INFO_DUMP_DEBUG_INFO,
+	SGX_MISC_INFO_DUMP_DEBUG_INFO_FORCE_REGS,
+	SGX_MISC_INFO_PANIC,
+	SGX_MISC_INFO_REQUEST_SPM,
+	SGX_MISC_INFO_REQUEST_ACTIVEPOWER,
+	SGX_MISC_INFO_REQUEST_LOCKUPS,
+#if defined(PVRSRV_USSE_EDM_STATUS_DEBUG)
+	SGX_MISC_INFO_REQUEST_EDM_STATUS_BUFFER_INFO,
+#endif
+	SGX_MISC_INFO_REQUEST_FORCE_I16 				=  0x7fff
+} SGX_MISC_INFO_REQUEST;
+
 typedef enum _SGXMKIF_CMD_TYPE_
 {
 	SGXMKIF_CMD_TA				= 0,
@@ -596,6 +672,13 @@ typedef struct _SGX_INTERNEL_STATUS_UPDATE_
 	CTL_STATUS				sCtlStatus;
 	IMG_HANDLE				hKernelMemInfo;
 } SGX_INTERNEL_STATUS_UPDATE;
+
+typedef struct PVRSRV_BRIDGE_RETURN_TAG
+{
+	PVRSRV_ERROR eError;
+	IMG_VOID *pvData;
+
+}PVRSRV_BRIDGE_RETURN;
 
 typedef struct _SGX_CCB_KICK_
 {
@@ -669,5 +752,148 @@ typedef struct PVRSRV_BRIDGE_IN_DOKICK_TAG
 	IMG_HANDLE				hDevCookie;
 	SGX_CCB_KICK			sCCBKick;
 }PVRSRV_BRIDGE_IN_DOKICK;
+
+typedef struct PVRSRV_BRIDGE_IN_CONNECT_SERVICES_TAG
+{
+	IMG_UINT32		ui32BridgeFlags; /* Must be first member of structure */
+	IMG_UINT32		ui32Flags;
+} PVRSRV_BRIDGE_IN_CONNECT_SERVICES;
+
+typedef struct PVRSRV_BRIDGE_OUT_CONNECT_SERVICES_TAG
+{
+	PVRSRV_ERROR    eError;
+	IMG_HANDLE		hKernelServices;
+}PVRSRV_BRIDGE_OUT_CONNECT_SERVICES;
+
+typedef struct PVRSRV_BRIDGE_IN_ACQUIRE_DEVICEINFO_TAG
+{
+	IMG_UINT32			ui32BridgeFlags; /* Must be first member of structure */
+	IMG_UINT32			uiDevIndex;
+	PVRSRV_DEVICE_TYPE	eDeviceType;
+
+} PVRSRV_BRIDGE_IN_ACQUIRE_DEVICEINFO;
+
+typedef struct PVRSRV_BRIDGE_OUT_ACQUIRE_DEVICEINFO_TAG
+{
+
+	PVRSRV_ERROR		eError;
+	IMG_HANDLE			hDevCookie;
+
+} PVRSRV_BRIDGE_OUT_ACQUIRE_DEVICEINFO;
+
+typedef struct _PVRSRV_SGX_MISCINFO_FEATURES
+{
+	IMG_UINT32			ui32CoreRev;	/*!< SGX Core revision from HW register */
+	IMG_UINT32			ui32CoreID;		/*!< SGX Core ID from HW register */
+	IMG_UINT32			ui32DDKVersion;	/*!< software DDK version */
+	IMG_UINT32			ui32DDKBuild;	/*!< software DDK build no. */
+	IMG_UINT32			ui32CoreIdSW;	/*!< software core version (ID), e.g. SGX535, SGX540 */
+	IMG_UINT32			ui32CoreRevSW;	/*!< software core revision */
+	IMG_UINT32			ui32BuildOptions;	/*!< build options bit-field */
+#if defined(SUPPORT_SGX_EDM_MEMORY_DEBUG)
+	IMG_UINT32			ui32DeviceMemValue;		/*!< device mem value read from ukernel */
+#endif
+} PVRSRV_SGX_MISCINFO_FEATURES;
+
+typedef struct _PVRSRV_SGX_MISCINFO_QUERY_CLOCKSPEED_SLCSIZE
+{
+	IMG_UINT32                      ui32SGXClockSpeed;
+	IMG_UINT32                      ui32SGXSLCSize;
+} PVRSRV_SGX_MISCINFO_QUERY_CLOCKSPEED_SLCSIZE;
+
+typedef struct _PVRSRV_SGX_MISCINFO_ACTIVEPOWER
+{
+	IMG_UINT32			ui32NumActivePowerEvents; /*!< active power events */
+} PVRSRV_SGX_MISCINFO_ACTIVEPOWER;
+
+typedef struct _PVRSRV_SGX_MISCINFO_LOCKUPS
+{
+	IMG_UINT32			ui32HostDetectedLockups; /*!< Host timer detected lockups */
+	IMG_UINT32			ui32uKernelDetectedLockups; /*!< Microkernel detected lockups */
+} PVRSRV_SGX_MISCINFO_LOCKUPS;
+
+typedef struct _PVRSRV_SGX_MISCINFO_SPM
+{
+	IMG_HANDLE			hRTDataSet;				/*!< render target data set handle returned from SGXAddRenderTarget */
+	IMG_UINT32			ui32NumOutOfMemSignals; /*!< Number of Out of Mem Signals */
+	IMG_UINT32			ui32NumSPMRenders;	/*!< Number of SPM renders */
+} PVRSRV_SGX_MISCINFO_SPM;
+
+typedef struct _PVRSRV_SGX_MISCINFO_SET_HWPERF_STATUS
+{
+	/* See PVRSRV_SGX_HWPERF_STATUS_* */
+	IMG_UINT32	ui32NewHWPerfStatus;
+	
+	#if defined(SGX_FEATURE_EXTENDED_PERF_COUNTERS)
+	/* Specifies the HW's active group selectors */
+	IMG_UINT32	aui32PerfGroup[PVRSRV_SGX_HWPERF_NUM_COUNTERS];
+	/* Specifies the HW's active bit selectors */
+	IMG_UINT32	aui32PerfBit[PVRSRV_SGX_HWPERF_NUM_COUNTERS];
+	/* Specifies the HW's counter bit selectors */
+	IMG_UINT32	ui32PerfCounterBitSelect;
+	/* Specifies the HW's sum_mux selectors */
+	IMG_UINT32	ui32PerfSumMux;
+	#else
+	/* Specifies the HW's active group */
+	IMG_UINT32	ui32PerfGroup;
+	#endif /* SGX_FEATURE_EXTENDED_PERF_COUNTERS */
+} PVRSRV_SGX_MISCINFO_SET_HWPERF_STATUS;
+
+typedef struct _SGX_MISC_INFO_
+{
+	SGX_MISC_INFO_REQUEST	eRequest;	/*!< Command request to SGXGetMiscInfo() */
+	IMG_UINT32				ui32Padding;
+#if defined(SUPPORT_SGX_EDM_MEMORY_DEBUG)
+	IMG_DEV_VIRTADDR			sDevVAddrSrc;		/*!< dev virtual addr for mem read */
+	IMG_DEV_VIRTADDR			sDevVAddrDest;		/*!< dev virtual addr for mem write */
+	IMG_HANDLE					hDevMemContext;		/*!< device memory context for mem debug */
+#endif
+	union
+	{
+		IMG_UINT32	reserved;	/*!< Unused: ensures valid code in the case everything else is compiled out */
+		PVRSRV_SGX_MISCINFO_FEATURES						sSGXFeatures;
+		IMG_UINT32											ui32SGXClockSpeed;
+		PVRSRV_SGX_MISCINFO_QUERY_CLOCKSPEED_SLCSIZE				sQueryClockSpeedSLCSize;
+		PVRSRV_SGX_MISCINFO_ACTIVEPOWER						sActivePower;
+		PVRSRV_SGX_MISCINFO_LOCKUPS							sLockups;
+		PVRSRV_SGX_MISCINFO_SPM								sSPM;
+#if defined(SGX_FEATURE_DATA_BREAKPOINTS)
+		SGX_BREAKPOINT_INFO									sSGXBreakpointInfo;
+#endif
+		PVRSRV_SGX_MISCINFO_SET_HWPERF_STATUS				sSetHWPerfStatus;
+
+#if defined(PVRSRV_USSE_EDM_STATUS_DEBUG)
+		PVRSRV_SGX_MISCINFO_EDM_STATUS_BUFFER_INFO			sEDMStatusBufferInfo;
+#endif
+	} uData;
+} SGX_MISC_INFO;
+
+typedef struct PVRSRV_BRIDGE_IN_SGXGETMISCINFO_TAG
+{
+	IMG_UINT32		ui32BridgeFlags; /* Must be first member of structure */
+	IMG_HANDLE		hDevCookie;
+	SGX_MISC_INFO	*psMiscInfo;
+}PVRSRV_BRIDGE_IN_SGXGETMISCINFO;
+
+typedef struct PVRSRV_BRIDGE_OUT_ENUMDEVICE_TAG
+{
+	PVRSRV_ERROR eError;
+	IMG_UINT32 ui32NumDevices;
+	PVRSRV_DEVICE_IDENTIFIER asDeviceIdentifier[PVRSRV_MAX_DEVICES];
+
+}PVRSRV_BRIDGE_OUT_ENUMDEVICE;
+
+typedef struct PVRSRV_BRIDGE_IN_CREATE_DEVMEMCONTEXT_TAG
+{
+	IMG_UINT32			ui32BridgeFlags; /* Must be first member of structure */
+	IMG_HANDLE			hDevCookie;
+
+}PVRSRV_BRIDGE_IN_CREATE_DEVMEMCONTEXT;
+
+typedef struct PVRSRV_BRIDGE_IN_GETCLIENTINFO_TAG
+{
+	IMG_UINT32					ui32BridgeFlags; /* Must be first member of structure */
+	IMG_HANDLE					hDevCookie;
+}PVRSRV_BRIDGE_IN_GETCLIENTINFO;
 
 #endif

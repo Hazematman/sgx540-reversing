@@ -25,6 +25,8 @@
    for the ioctl name */
 #include "pvr_ioctl.h"
 
+#include "pprint.c"
+
 #define MAX_FDS 128
 #define PROLOG(func) \
     static typeof(func) *orig_##func = NULL; \
@@ -351,13 +353,26 @@ static bool pvrsrv_ioctl(PVRSRV_BRIDGE_PACKAGE *bridge_package) {
         case PVRSRV_BRIDGE_GET_DISPCLASS_SYSBUFFER:
         case PVRSRV_BRIDGE_ENUM_CLASS:
         case PVRSRV_BRIDGE_SGX_GETINTERNALDEVINFO:
+            break;
         case PVRSRV_BRIDGE_CONNECT_SERVICES:
+            PPRINT(stdout, bridge_package->pvParamIn, PVRSRV_BRIDGE_IN_CONNECT_SERVICES);
+            break;
         case PVRSRV_BRIDGE_ENUM_DEVICES:
+            break;
         case PVRSRV_BRIDGE_ACQUIRE_DEVICEINFO:
+            PPRINT(stdout, bridge_package->pvParamIn, PVRSRV_BRIDGE_IN_ACQUIRE_DEVICEINFO);
+            break;
         case PVRSRV_BRIDGE_SGX_GETMISCINFO:
+            PPRINT(stdout, bridge_package->pvParamIn, PVRSRV_BRIDGE_IN_SGXGETMISCINFO);
+            break;
         case PVRSRV_BRIDGE_DISCONNECT_SERVICES:
+            break;
         case PVRSRV_BRIDGE_CREATE_DEVMEMCONTEXT:
+            PPRINT(stdout, bridge_package->pvParamIn, PVRSRV_BRIDGE_IN_CREATE_DEVMEMCONTEXT);
+            break;
         case PVRSRV_BRIDGE_SGX_GETCLIENTINFO:
+            PPRINT(stdout, bridge_package->pvParamIn, PVRSRV_BRIDGE_IN_GETCLIENTINFO);
+            break;
         case PVRSRV_BRIDGE_GET_MISC_INFO:
         case PVRSRV_BRIDGE_EVENT_OBJECT_OPEN:
         case PVRSRV_BRIDGE_GET_DEVMEM_HEAPINFO:

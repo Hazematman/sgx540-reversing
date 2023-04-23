@@ -15,4 +15,5 @@ node_modules
 vertex_shader*
 *.so
 *.swp
+*.swo
 Session.vim
