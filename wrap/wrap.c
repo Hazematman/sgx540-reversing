@@ -84,6 +84,14 @@ static struct fd_info {
     bool is_pvr;
 } fds[MAX_FDS];
 
+static FILE *log_file;
+static void open_log_file() {
+    if(log_file == NULL) {
+        log_file = fopen("log.bin", "wb");
+        assert(log_file);
+    }
+}
+
 #define INRANGE(val, min, len) (val >= min && val < (min+len))
 static enum pvr_heap get_heap(IMG_DEV_VIRTADDR vaddr) {
     if(INRANGE(vaddr.uiAddr, SGX_VERTEXSHADER_HEAP_BASE, SGX_VERTEXSHADER_HEAP_SIZE)) {
@@ -250,6 +258,15 @@ static bool is_pvr(int fd) {
 static void pvrsrv_ioctl_post(int fd, PVRSRV_BRIDGE_PACKAGE *bridge_package, int ret) {
     int ioctl_nr = _IOC_NR(bridge_package->ui32BridgeID);
     switch(ioctl_nr) {
+        case PVRSRV_BRIDGE_CONNECT_SERVICES:
+            PPRINT(stdout, bridge_package->pvParamOut, PVRSRV_BRIDGE_OUT_CONNECT_SERVICES);
+            break;
+        case PVRSRV_BRIDGE_ENUM_DEVICES:
+            PPRINT(stdout, bridge_package->pvParamOut, PVRSRV_BRIDGE_OUT_ENUMDEVICE);
+            break;
+        case PVRSRV_BRIDGE_ACQUIRE_DEVICEINFO:
+            PPRINT(stdout, bridge_package->pvParamOut, PVRSRV_BRIDGE_OUT_ACQUIRE_DEVICEINFO);  
+            break;
         case PVRSRV_BRIDGE_ALLOC_DEVICEMEM:
             {
                 PVRSRV_BRIDGE_OUT_ALLOCDEVICEMEM *mem_data = bridge_package->pvParamOut;
@@ -356,22 +373,27 @@ static bool pvrsrv_ioctl(PVRSRV_BRIDGE_PACKAGE *bridge_package) {
             break;
         case PVRSRV_BRIDGE_CONNECT_SERVICES:
             PPRINT(stdout, bridge_package->pvParamIn, PVRSRV_BRIDGE_IN_CONNECT_SERVICES);
+            //fwrite(bridge_package->pvParamIn, 1, sizeof(PVRSRV_BRIDGE_IN_CONNECT_SERVICES), log_file);
             break;
         case PVRSRV_BRIDGE_ENUM_DEVICES:
             break;
         case PVRSRV_BRIDGE_ACQUIRE_DEVICEINFO:
             PPRINT(stdout, bridge_package->pvParamIn, PVRSRV_BRIDGE_IN_ACQUIRE_DEVICEINFO);
+            //fwrite(bridge_package->pvParamIn, 1, sizeof(PVRSRV_BRIDGE_IN_ACQUIRE_DEVICEINFO), log_file);
             break;
         case PVRSRV_BRIDGE_SGX_GETMISCINFO:
             PPRINT(stdout, bridge_package->pvParamIn, PVRSRV_BRIDGE_IN_SGXGETMISCINFO);
+            //fwrite(bridge_package->pvParamIn, 1, sizeof(PVRSRV_BRIDGE_IN_SGXGETMISCINFO), log_file);
             break;
         case PVRSRV_BRIDGE_DISCONNECT_SERVICES:
             break;
         case PVRSRV_BRIDGE_CREATE_DEVMEMCONTEXT:
             PPRINT(stdout, bridge_package->pvParamIn, PVRSRV_BRIDGE_IN_CREATE_DEVMEMCONTEXT);
+            //fwrite(bridge_package->pvParamIn, 1, sizeof(PVRSRV_BRIDGE_IN_CREATE_DEVMEMCONTEXT), log_file);
             break;
         case PVRSRV_BRIDGE_SGX_GETCLIENTINFO:
             PPRINT(stdout, bridge_package->pvParamIn, PVRSRV_BRIDGE_IN_GETCLIENTINFO);
+            //fwrite(bridge_package->pvParamIn, 1, sizeof(PVRSRV_BRIDGE_IN_GETCLIENTINFO), log_file);
             break;
         case PVRSRV_BRIDGE_GET_MISC_INFO:
         case PVRSRV_BRIDGE_EVENT_OBJECT_OPEN:
@@ -391,6 +413,7 @@ static bool pvrsrv_ioctl(PVRSRV_BRIDGE_PACKAGE *bridge_package) {
 }
 
 static bool pvr_ioctl_pre(int fd, int request, void *ptr) {
+    //fwrite(&request, 1, sizeof(request), log_file);
     int ioctl_nr = _IOC_NR(request);
     switch(ioctl_nr) {
         case _IOC_NR(DRM_IOCTL_VERSION):
@@ -404,8 +427,17 @@ static bool pvr_ioctl_pre(int fd, int request, void *ptr) {
             break;
         case _IOC_NR(DRM_IOCTL_SET_VERSION):
             printf(">>> ioctl(DRM_IOCTL_SET_VERSION)\n");
+            {
+                struct drm_set_version *data = ptr;
+                printf("\t%d %d %d %d\n", data->drm_di_major,
+                                        data->drm_di_minor,
+                                        data->drm_dd_major,
+                                        data->drm_dd_minor);
+            }
             break;
         case PVR_DRM_SRVKM_CMD: 
+            //fwrite(ptr, 1, sizeof(PVRSRV_BRIDGE_PACKAGE), log_file);
+            PPRINT(stdout, ptr, PVRSRV_BRIDGE_PACKAGE);
             return pvrsrv_ioctl(ptr);
             break;
         case PVR_DRM_IS_MASTER_CMD:
@@ -431,6 +463,7 @@ static void pvr_ioctl_post(int fd, int request, void *ptr, int ret) {
 
 int ioctl(int fd, int request, ...) {
     PROLOG(ioctl);
+    //open_log_file();
     int ioc_size = _IOC_SIZE(request);
     bool pvr = is_pvr(fd);
 
