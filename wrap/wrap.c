@@ -23,7 +23,9 @@
 #define DRM_PVR_RESERVED6 (DRM_COMMAND_BASE + 5)
 
 /* PVR includes */
+#define SUPPORT_MEMINFO_IDS
 #include <config_kernel.h>
+#include <sgxfeaturedefs.h>
 #include <pvr_bridge.h>
 #include <sgx_bridge.h>
 #include <pvr_drm_shared.h>
@@ -54,6 +56,8 @@ enum pvr_heap {
     PVR_HEAP_SYNC_INFO,
     PVR_HEAP_KERNEL_DATA,
     PVR_HEAP_TA_DATA,
+    PVR_HEAP_SHARED_3DPARAMETERS,
+    PVR_HEAP_PERCONTEXT_3DPARAMETERS,
 };
 
 static const char *pvr_heap_names[] = {
@@ -65,6 +69,8 @@ static const char *pvr_heap_names[] = {
     [PVR_HEAP_SYNC_INFO] = "SyncInfo",
     [PVR_HEAP_KERNEL_DATA] = "KernelData",
     [PVR_HEAP_TA_DATA] = "TAData",
+    [PVR_HEAP_SHARED_3DPARAMETERS] = "Shared3DParameters",
+    [PVR_HEAP_PERCONTEXT_3DPARAMETERS] = "PerContext3DParameters",
 };
 
 #define MAX_BUFFERS_TO_TRACK 256
@@ -109,7 +115,11 @@ static enum pvr_heap get_heap(IMG_DEV_VIRTADDR vaddr) {
         return PVR_HEAP_KERNEL_DATA;
     } else if(INRANGE(vaddr.uiAddr, SGX_TADATA_HEAP_BASE, SGX_TADATA_HEAP_SIZE)) {
         return PVR_HEAP_TA_DATA;
-    } else {
+    } else if(INRANGE(vaddr.uiAddr, SGX_SHARED_3DPARAMETERS_HEAP_BASE, SGX_SHARED_3DPARAMETERS_HEAP_SIZE)) {
+        return PVR_HEAP_SHARED_3DPARAMETERS;
+    } else if(INRANGE(vaddr.uiAddr, SGX_PERCONTEXT_3DPARAMETERS_HEAP_BASE, SGX_PERCONTEXT_3DPARAMETERS_HEAP_SIZE)) {
+        return PVR_HEAP_PERCONTEXT_3DPARAMETERS;
+    }else {
         printf("Unhandled addr 0x%X\n", vaddr.uiAddr);
         assert(false);
     }
@@ -126,7 +136,7 @@ static void clear_mem(struct mem_entry *mem) {
     IMG_HANDLE handle = mem->mem_info.hKernelMemInfo;
     bool is_special_heap = handle == 0x14;
     if(valid_heap || is_special_heap) {
-        memset(mem->data, 0x00, mem->mem_info.uAllocSize);
+        //memset(mem->data, 0x00, mem->mem_info.uAllocSize);
     }
 }
 
@@ -149,6 +159,7 @@ static void track_buffer(PVRSRV_CLIENT_MEM_INFO *mem_info, bool disp_mem) {
                 mem->mem_info.hKernelMemInfo = mem->mem_info.hMappingInfo;
             }
             printf("TRACKING %p\n", mem->mem_info.hMappingInfo);
+            printf(" Next is %p\n", mem->mem_info.psNext);
             return;
         }
     }
@@ -225,11 +236,13 @@ static void patch_buffers() {
     int track_arr_size = sizeof(mem_trackings)/sizeof(mem_trackings[0]);
     for(int i = 0; i < track_arr_size; i++) {
         struct mem_entry *mem = &mem_trackings[i];
+#if 0
         if(mem->in_use && mem->mem_info.hKernelMemInfo == 0x73) {
             float *clear_color = ((uint8_t*)mem->data) + 0xac;
             clear_color[0] = 1.0f;
             clear_color[1] = 0.5f;
         } 
+#endif
 #if 0
         else if(mem->in_use && mem->mem_info.hKernelMemInfo == 0x14) {
             uint32_t *cmds = ((uint8_t*)mem->data) + 0x00;

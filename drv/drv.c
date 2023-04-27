@@ -19,7 +19,9 @@
 #define DRM_PVR_RESERVED6 (DRM_COMMAND_BASE + 5)
 
 /* PVR includes */
+#define SUPPORT_MEMINFO_IDS
 #include <config_kernel.h>
+#include <sgxfeaturedefs.h>
 #include <pvr_bridge.h>
 #include <sgx_bridge.h>
 #include <pvr_drm_shared.h>
