@@ -136,8 +136,22 @@ static void clear_mem(struct mem_entry *mem) {
     IMG_HANDLE handle = mem->mem_info.hKernelMemInfo;
     bool is_special_heap = handle == 0x14;
     if(valid_heap || is_special_heap) {
-        //memset(mem->data, 0x00, mem->mem_info.uAllocSize);
+        memset(mem->data, 0x00, mem->mem_info.uAllocSize);
     }
+
+/* TODO, it might be help to track all writes to the command buffer
+ * in order to do this we would need to handle SEGV to figure out
+ * what is being written to memory and then recover from it.
+ * One thing to note is that 0x14 (which appears to be the memory for
+ * the CCB in my test app) gets written to by memcpy. so in theory
+ * we might be able to just hook into memcpy and see if the addr
+ * is part of CCB.
+ */
+#if 0
+    if(is_special_heap) {
+        mprotect(mem->data, mem->mem_info.uAllocSize, PROT_READ);
+    }
+#endif
 }
 
 static void track_buffer(PVRSRV_CLIENT_MEM_INFO *mem_info, bool disp_mem) {
