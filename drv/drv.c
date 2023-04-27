@@ -123,6 +123,55 @@ static void acquire_devinfo(struct driver_state *state) {
     state->dev_cookie = out.hDevCookie;
 }
 
+static void sgx_get_misc_info(struct driver_state *state) {
+    SGX_MISC_INFO misc_info = {
+        .eRequest = SGX_MISC_INFO_REQUEST_DRIVER_SGXREV,
+    };
+    PVRSRV_BRIDGE_IN_SGXGETMISCINFO in = {
+        .hDevCookie = state->dev_cookie,
+        .psMiscInfo = &misc_info,
+    };
+    PVRSRV_BRIDGE_RETURN out;
+    PVRSRV_BRIDGE_PACKAGE data = {
+        .ui32BridgeID = PVRSRV_BRIDGE_SGX_GETMISCINFO,
+        .ui32Size = sizeof(data),
+        .pvParamIn = &in,
+        .ui32InBufferSize = sizeof(in),
+        .pvParamOut = &out,
+        .ui32OutBufferSize = sizeof(out),
+        .hKernelServices = state->kernel_services,
+    };
+
+    check_ioctl(state->fd, DRM_IOCTL_PVR_SRVKM, &data);
+    check_pvr_error(out.eError);
+
+    /* TODO figure out what we do with misc info */
+    PPRINT(stdout, &in, PVRSRV_BRIDGE_IN_SGXGETMISCINFO);
+    fprintf(stdout, "\n");
+    PPRINT(stdout, &in.psMiscInfo->uData.sSGXFeatures, PVRSRV_SGX_MISCINFO_FEATURES);
+    fprintf(stdout, "\n");
+}
+
+static void create_devmemcontext(struct driver_state *state) {
+    PVRSRV_BRIDGE_IN_CREATE_DEVMEMCONTEXT in = {
+        .hDevCookie = state->dev_cookie
+    };
+    PVRSRV_BRIDGE_OUT_CREATE_DEVMEMCONTEXT out;
+    PVRSRV_BRIDGE_PACKAGE data = {
+        .ui32BridgeID = PVRSRV_BRIDGE_CREATE_DEVMEMCONTEXT,
+        .ui32Size = sizeof(data),
+        .pvParamIn = &in,
+        .ui32InBufferSize = sizeof(in),
+        .pvParamOut = &out,
+        .ui32OutBufferSize = sizeof(out),
+        .hKernelServices = state->kernel_services
+    };
+
+    check_ioctl(state->fd, DRM_IOCTL_PVR_SRVKM, &data);
+    check_pvr_error(out.eError);
+    PPRINT(stdout, &out, PVRSRV_BRIDGE_OUT_CREATE_DEVMEMCONTEXT);
+}
+
 int main(int argc, char *argv[]) {
     UNUSED(argc);
     UNUSED(argv);
@@ -146,6 +195,8 @@ int main(int argc, char *argv[]) {
     connect_service(&state);
     enum_devices(&state);
     acquire_devinfo(&state);
+    sgx_get_misc_info(&state);
+    create_devmemcontext(&state);
 
     close(state.fd);
 

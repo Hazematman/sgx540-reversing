@@ -359,3 +359,25 @@ static void pprint_PVRSRV_BRIDGE_OUT_ACQUIRE_DEVICEINFO(FILE *fp, PVRSRV_BRIDGE_
     fprintf(fp, "{\n.eError = %s,\n.hDevCookie = %p,\n}",
                 PPRINT(fp, data->eError, PVRSRV_ERROR), data->hDevCookie);
 }
+
+static void pprint_PVRSRV_SGX_MISCINFO_FEATURES(FILE *fp, PVRSRV_SGX_MISCINFO_FEATURES *data) {
+    fprintf(fp, "{\n.ui32CoreRev = 0x%x,\n.ui32CoreID = 0x%x,\n.ui32DDKVersion = 0%x,\n.ui32DDBBuild = 0x%x\n.ui32CoreIdSW = 0x%x,\n.uiCoreRevSW = 0x%x,\n.ui32BuildOptions = 0x%x,\n}",
+                data->ui32CoreRev, data->ui32CoreID, data->ui32DDKVersion, data->ui32DDKBuild, data->ui32CoreIdSW,
+                data->ui32CoreRevSW, data->ui32BuildOptions);
+}
+
+static void pprint_PVRSRV_HEAP_INFO(FILE *fp, PVRSRV_HEAP_INFO *data) {
+    fprintf(fp, "{\n.ui32HeapID = 0x%x,\n.hDevMemHeap = %p,\n.sDevVAddrBase = 0x%x,\n.ui32HeapByteSize = 0x%x,\n.ui32Attribs = 0x%x,\n.ui32XTileStride = 0x%x\n}",
+                data->ui32HeapID, data->hDevMemHeap, data->sDevVAddrBase.uiAddr, data->ui32HeapByteSize,
+                data->ui32Attribs, data->ui32XTileStride);
+}
+
+static void pprint_PVRSRV_BRIDGE_OUT_CREATE_DEVMEMCONTEXT(FILE *fp, PVRSRV_BRIDGE_OUT_CREATE_DEVMEMCONTEXT *data) {
+    fprintf(fp, "{\n.eError = %s,\n.hDevMemContext = %p,\n.ui32ClientHeapCount = %d,\n.sHeapInfo = {\n",
+                PPRINT(fp, data->eError, PVRSRV_ERROR), data->hDevMemContext, data->ui32ClientHeapCount);
+    for(uint32_t i = 0; i < data->ui32ClientHeapCount; i++) {
+        PPRINT(fp, &data->sHeapInfo[i], PVRSRV_HEAP_INFO);
+        fprintf(fp, ",\n");
+    }
+    fprintf(fp, "}");
+}

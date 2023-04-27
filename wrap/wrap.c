@@ -15,14 +15,22 @@
 
 #include <xf86drm.h>
 
-#define TRANSFER_QUEUE
-#define SUPPORT_MEMINFO_IDS
-#include "pvr_types.h"
-#include "pvr_heaps.h"
+#define DRM_PVR_RESERVED1 (DRM_COMMAND_BASE + 0)
+#define DRM_PVR_RESERVED2 (DRM_COMMAND_BASE + 1)
+#define DRM_PVR_RESERVED3 (DRM_COMMAND_BASE + 2)
+#define DRM_PVR_RESERVED4 (DRM_COMMAND_BASE + 3)
+#define DRM_PVR_RESERVED5 (DRM_COMMAND_BASE + 4)
+#define DRM_PVR_RESERVED6 (DRM_COMMAND_BASE + 5)
 
-/* NOTE make sure defines match between this and dump_ioctl.c */
-/* You need to have matching defines in order to get the right ioctl number
-   for the ioctl name */
+/* PVR includes */
+#include <config_kernel.h>
+#include <pvr_bridge.h>
+#include <sgx_bridge.h>
+#include <pvr_drm_shared.h>
+#include <sgxconfig.h>
+
+#define DRM_IOCTL_PVR_SRVKM DRM_IOWR(PVR_DRM_SRVKM_CMD, PVRSRV_BRIDGE_PACKAGE)
+
 #include "pvr_ioctl.h"
 
 #include "pprint.c"
@@ -57,15 +65,6 @@ static const char *pvr_heap_names[] = {
     [PVR_HEAP_SYNC_INFO] = "SyncInfo",
     [PVR_HEAP_KERNEL_DATA] = "KernelData",
     [PVR_HEAP_TA_DATA] = "TAData",
-};
-
-enum pvr_ioctl {
-    //DRM_IOCTL_VERSION = 0x00,
-    //DRM_IOCTL_GET_UNIQUE = 0x01,
-    //DRM_IOCTL_GET_MAGIC = 0x02,
-    //DRM_IOCTL_SET_VERSION = 0x07,
-    PVR_DRM_SRVKM_CMD = DRM_COMMAND_BASE + 0x00,
-    PVR_DRM_IS_MASTER_CMD = DRM_COMMAND_BASE + 0x03,
 };
 
 #define MAX_BUFFERS_TO_TRACK 256
@@ -258,16 +257,16 @@ static bool is_pvr(int fd) {
 static void pvrsrv_ioctl_post(int fd, PVRSRV_BRIDGE_PACKAGE *bridge_package, int ret) {
     int ioctl_nr = _IOC_NR(bridge_package->ui32BridgeID);
     switch(ioctl_nr) {
-        case PVRSRV_BRIDGE_CONNECT_SERVICES:
+        case _IOC_NR(PVRSRV_BRIDGE_CONNECT_SERVICES):
             PPRINT(stdout, bridge_package->pvParamOut, PVRSRV_BRIDGE_OUT_CONNECT_SERVICES);
             break;
-        case PVRSRV_BRIDGE_ENUM_DEVICES:
+        case _IOC_NR(PVRSRV_BRIDGE_ENUM_DEVICES):
             PPRINT(stdout, bridge_package->pvParamOut, PVRSRV_BRIDGE_OUT_ENUMDEVICE);
             break;
-        case PVRSRV_BRIDGE_ACQUIRE_DEVICEINFO:
+        case _IOC_NR(PVRSRV_BRIDGE_ACQUIRE_DEVICEINFO):
             PPRINT(stdout, bridge_package->pvParamOut, PVRSRV_BRIDGE_OUT_ACQUIRE_DEVICEINFO);  
             break;
-        case PVRSRV_BRIDGE_ALLOC_DEVICEMEM:
+        case _IOC_NR(PVRSRV_BRIDGE_ALLOC_DEVICEMEM):
             {
                 PVRSRV_BRIDGE_OUT_ALLOCDEVICEMEM *mem_data = bridge_package->pvParamOut;
                 PVRSRV_CLIENT_MEM_INFO *mem = &mem_data->sClientMemInfo;
@@ -275,21 +274,21 @@ static void pvrsrv_ioctl_post(int fd, PVRSRV_BRIDGE_PACKAGE *bridge_package, int
                 printf("Alloc %p\n", mem->hKernelMemInfo);
             }
             break;
-        case PVRSRV_BRIDGE_MHANDLE_TO_MMAP_DATA:
+        case _IOC_NR(PVRSRV_BRIDGE_MHANDLE_TO_MMAP_DATA):
             {
                 PVRSRV_BRIDGE_IN_MHANDLE_TO_MMAP_DATA *in_data = bridge_package->pvParamIn;
                 PVRSRV_BRIDGE_OUT_MHANDLE_TO_MMAP_DATA *out_data = bridge_package->pvParamOut;
                 add_mmap_data(fd, in_data->hMHandle, out_data);
             }
             break;
-        case PVRSRV_BRIDGE_MAP_DEVICECLASS_MEMORY:
+        case _IOC_NR(PVRSRV_BRIDGE_MAP_DEVICECLASS_MEMORY):
             {
                 PVRSRV_BRIDGE_OUT_MAP_DEVICECLASS_MEMORY *out_data = bridge_package->pvParamOut;
                 track_buffer(&out_data->sClientMemInfo, true);
                 printf("Disp class %p\n", out_data->sClientMemInfo.hMappingInfo);
             }
             break;
-        case PVRSRV_BRIDGE_MAP_DEV_MEMORY: 
+        case _IOC_NR(PVRSRV_BRIDGE_MAP_DEV_MEMORY): 
             {
                 PVRSRV_BRIDGE_OUT_MAP_DEV_MEMORY *out_data = bridge_package->pvParamOut;
                 track_buffer(&out_data->sDstClientMemInfo, false);
@@ -303,37 +302,37 @@ static bool pvrsrv_ioctl(PVRSRV_BRIDGE_PACKAGE *bridge_package) {
     int ioctl_nr = _IOC_NR(bridge_package->ui32BridgeID);
     printf(">>> pvr_ioctl(%s)\n", pvrsrv_ioctl_names[ioctl_nr]);
     switch(ioctl_nr) {
-        case PVRSRV_BRIDGE_MHANDLE_TO_MMAP_DATA:
+        case _IOC_NR(PVRSRV_BRIDGE_MHANDLE_TO_MMAP_DATA):
             /* TODO track memory */
             break;
-        case PVRSRV_BRIDGE_ALLOC_DEVICEMEM:
+        case _IOC_NR(PVRSRV_BRIDGE_ALLOC_DEVICEMEM):
             /* TODO track memory */
             break;
-        case PVRSRV_BRIDGE_SGX_REGISTER_HW_RENDER_CONTEXT:
+        case _IOC_NR(PVRSRV_BRIDGE_SGX_REGISTER_HW_RENDER_CONTEXT):
             /* TODO figure out if we can find cmd submits from this */
             break;
-        case PVRSRV_BRIDGE_SGX_REGISTER_HW_TRANSFER_CONTEXT:
+        case _IOC_NR(PVRSRV_BRIDGE_SGX_REGISTER_HW_TRANSFER_CONTEXT):
             /* TODO figure out if we can find cmd submits from this */
             break;
-        case PVRSRV_BRIDGE_MAP_DEVICECLASS_MEMORY:
+        case _IOC_NR(PVRSRV_BRIDGE_MAP_DEVICECLASS_MEMORY):
             /* TODO figure out if we need to track this memory */
             break;
-        case PVRSRV_BRIDGE_RELEASE_MMAP_DATA:
+        case _IOC_NR(PVRSRV_BRIDGE_RELEASE_MMAP_DATA):
             /* TODO track memory */
             break;
-        case PVRSRV_BRIDGE_UNMAP_DEVICECLASS_MEMORY:
+        case _IOC_NR(PVRSRV_BRIDGE_UNMAP_DEVICECLASS_MEMORY):
             /* TODO track memory */
             break;
-        case PVRSRV_BRIDGE_MAP_DEV_MEMORY:
+        case _IOC_NR(PVRSRV_BRIDGE_MAP_DEV_MEMORY):
             /* TODO track memory */
             break;
-        case PVRSRV_BRIDGE_UNMAP_DEV_MEMORY:
+        case _IOC_NR(PVRSRV_BRIDGE_UNMAP_DEV_MEMORY):
             /* TODO track memory */
             break;
-        case PVRSRV_BRIDGE_FREE_DEVICEMEM:
+        case _IOC_NR(PVRSRV_BRIDGE_FREE_DEVICEMEM):
             /* TODO track memory */
             break;
-        case PVRSRV_BRIDGE_SGX_DOKICK:
+        case _IOC_NR(PVRSRV_BRIDGE_SGX_DOKICK):
             /* This is the command to kick off command execution */
             {
                 int num_buffers = 0;
@@ -355,53 +354,53 @@ static bool pvrsrv_ioctl(PVRSRV_BRIDGE_PACKAGE *bridge_package) {
                 printf("Kernel mem handle %p\n", ccb->sCCBKick.hCCBKernelMemInfo);
             }
             break;
-        case PVRSRV_BRIDGE_SGX_SET_RENDER_CONTEXT_PRIORITY:
-        case PVRSRV_BRIDGE_SGX_SET_TRANSFER_CONTEXT_PRIORITY:
+        case _IOC_NR(PVRSRV_BRIDGE_SGX_SET_RENDER_CONTEXT_PRIORITY):
+        case _IOC_NR(PVRSRV_BRIDGE_SGX_SET_TRANSFER_CONTEXT_PRIORITY):
             /* TODO figure out if this is important */
             break;
-        case PVRSRV_BRIDGE_EVENT_OBJECT_WAIT:
-        case PVRSRV_BRIDGE_SYNC_OPS_FLUSH_TO_TOKEN:
-        case PVRSRV_BRIDGE_SYNC_OPS_TAKE_TOKEN:
-        case PVRSRV_BRIDGE_OPEN_DISPCLASS_DEVICE:
-        case PVRSRV_BRIDGE_GET_DISPCLASS_INFO:
-        case PVRSRV_BRIDGE_CLOSE_DISPCLASS_DEVICE:
-        case PVRSRV_BRIDGE_ENUM_DISPCLASS_FORMATS:
-        case PVRSRV_BRIDGE_ENUM_DISPCLASS_DIMS:
-        case PVRSRV_BRIDGE_GET_DISPCLASS_SYSBUFFER:
-        case PVRSRV_BRIDGE_ENUM_CLASS:
-        case PVRSRV_BRIDGE_SGX_GETINTERNALDEVINFO:
+        case _IOC_NR(PVRSRV_BRIDGE_EVENT_OBJECT_WAIT):
+        case _IOC_NR(PVRSRV_BRIDGE_SYNC_OPS_FLUSH_TO_TOKEN):
+        case _IOC_NR(PVRSRV_BRIDGE_SYNC_OPS_TAKE_TOKEN):
+        case _IOC_NR(PVRSRV_BRIDGE_OPEN_DISPCLASS_DEVICE):
+        case _IOC_NR(PVRSRV_BRIDGE_GET_DISPCLASS_INFO):
+        case _IOC_NR(PVRSRV_BRIDGE_CLOSE_DISPCLASS_DEVICE):
+        case _IOC_NR(PVRSRV_BRIDGE_ENUM_DISPCLASS_FORMATS):
+        case _IOC_NR(PVRSRV_BRIDGE_ENUM_DISPCLASS_DIMS):
+        case _IOC_NR(PVRSRV_BRIDGE_GET_DISPCLASS_SYSBUFFER):
+        case _IOC_NR(PVRSRV_BRIDGE_ENUM_CLASS):
+        case _IOC_NR(PVRSRV_BRIDGE_SGX_GETINTERNALDEVINFO):
             break;
-        case PVRSRV_BRIDGE_CONNECT_SERVICES:
+        case _IOC_NR(PVRSRV_BRIDGE_CONNECT_SERVICES):
             PPRINT(stdout, bridge_package->pvParamIn, PVRSRV_BRIDGE_IN_CONNECT_SERVICES);
             //fwrite(bridge_package->pvParamIn, 1, sizeof(PVRSRV_BRIDGE_IN_CONNECT_SERVICES), log_file);
             break;
-        case PVRSRV_BRIDGE_ENUM_DEVICES:
+        case _IOC_NR(PVRSRV_BRIDGE_ENUM_DEVICES):
             break;
-        case PVRSRV_BRIDGE_ACQUIRE_DEVICEINFO:
+        case _IOC_NR(PVRSRV_BRIDGE_ACQUIRE_DEVICEINFO):
             PPRINT(stdout, bridge_package->pvParamIn, PVRSRV_BRIDGE_IN_ACQUIRE_DEVICEINFO);
             //fwrite(bridge_package->pvParamIn, 1, sizeof(PVRSRV_BRIDGE_IN_ACQUIRE_DEVICEINFO), log_file);
             break;
-        case PVRSRV_BRIDGE_SGX_GETMISCINFO:
+        case _IOC_NR(PVRSRV_BRIDGE_SGX_GETMISCINFO):
             PPRINT(stdout, bridge_package->pvParamIn, PVRSRV_BRIDGE_IN_SGXGETMISCINFO);
             //fwrite(bridge_package->pvParamIn, 1, sizeof(PVRSRV_BRIDGE_IN_SGXGETMISCINFO), log_file);
             break;
-        case PVRSRV_BRIDGE_DISCONNECT_SERVICES:
+        case _IOC_NR(PVRSRV_BRIDGE_DISCONNECT_SERVICES):
             break;
-        case PVRSRV_BRIDGE_CREATE_DEVMEMCONTEXT:
+        case _IOC_NR(PVRSRV_BRIDGE_CREATE_DEVMEMCONTEXT):
             PPRINT(stdout, bridge_package->pvParamIn, PVRSRV_BRIDGE_IN_CREATE_DEVMEMCONTEXT);
             //fwrite(bridge_package->pvParamIn, 1, sizeof(PVRSRV_BRIDGE_IN_CREATE_DEVMEMCONTEXT), log_file);
             break;
-        case PVRSRV_BRIDGE_SGX_GETCLIENTINFO:
+        case _IOC_NR(PVRSRV_BRIDGE_SGX_GETCLIENTINFO):
             PPRINT(stdout, bridge_package->pvParamIn, PVRSRV_BRIDGE_IN_GETCLIENTINFO);
             //fwrite(bridge_package->pvParamIn, 1, sizeof(PVRSRV_BRIDGE_IN_GETCLIENTINFO), log_file);
             break;
-        case PVRSRV_BRIDGE_GET_MISC_INFO:
-        case PVRSRV_BRIDGE_EVENT_OBJECT_OPEN:
-        case PVRSRV_BRIDGE_GET_DEVMEM_HEAPINFO:
-        case PVRSRV_BRIDGE_SGX_UNREGISTER_HW_RENDER_CONTEXT:
-        case PVRSRV_BRIDGE_EVENT_OBJECT_CLOSE:
-        case PVRSRV_BRIDGE_SGX_RELEASECLIENTINFO:
-        case PVRSRV_BRIDGE_DESTROY_DEVMEMCONTEXT:
+        case _IOC_NR(PVRSRV_BRIDGE_GET_MISC_INFO):
+        case _IOC_NR(PVRSRV_BRIDGE_EVENT_OBJECT_OPEN):
+        case _IOC_NR(PVRSRV_BRIDGE_GET_DEVMEM_HEAPINFO):
+        case _IOC_NR(PVRSRV_BRIDGE_SGX_UNREGISTER_HW_RENDER_CONTEXT):
+        case _IOC_NR(PVRSRV_BRIDGE_EVENT_OBJECT_CLOSE):
+        case _IOC_NR(PVRSRV_BRIDGE_SGX_RELEASECLIENTINFO):
+        case _IOC_NR(PVRSRV_BRIDGE_DESTROY_DEVMEMCONTEXT):
             /* TODO figure out if these ioctl need to be handled */
             break;
         default:
@@ -437,7 +436,7 @@ static bool pvr_ioctl_pre(int fd, int request, void *ptr) {
             break;
         case PVR_DRM_SRVKM_CMD: 
             //fwrite(ptr, 1, sizeof(PVRSRV_BRIDGE_PACKAGE), log_file);
-            PPRINT(stdout, ptr, PVRSRV_BRIDGE_PACKAGE);
+            //PPRINT(stdout, ptr, PVRSRV_BRIDGE_PACKAGE);
             return pvrsrv_ioctl(ptr);
             break;
         case PVR_DRM_IS_MASTER_CMD:
