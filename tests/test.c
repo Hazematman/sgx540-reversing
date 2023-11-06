@@ -164,7 +164,7 @@ int main(int argc, char *argv[]) {
     ECHK(eglQuerySurface(display, surface, EGL_WIDTH, &width));
     ECHK(eglQuerySurface(display, surface, EGL_HEIGHT, &height));
     printf("Buffer %dx%d\n", width, height);
-#endif 
+#endif
     open_x11(argc, argv);
 
     GCHK(glViewport(0, 0, width, height));
@@ -186,6 +186,15 @@ int main(int argc, char *argv[]) {
 
     FLOG(glXSwapBuffers(dpy, win));
     //for(;;) {};
+#if 1
+    {
+        GCHK(glReadPixels(0, 0, 1, 1, GL_RGB, GL_UNSIGNED_BYTE, data));
+        uint8_t red = data[0];
+        uint8_t green = data[1];
+        uint8_t blue = data[2];
+        printf("Color %d %d %d\n", red, green, blue);
+    }
+#endif
 
 #if 0
     FILE *fp = fopen("out.ppm", "w");

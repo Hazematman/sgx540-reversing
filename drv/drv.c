@@ -89,7 +89,7 @@ static void enum_devices(struct driver_state *state) {
 
     check_ioctl(state->fd, DRM_IOCTL_PVR_SRVKM, &data);
     check_pvr_error(out.eError);
-    
+
     bool gpu_found = false;
     for(uint32_t i = 0; i < out.ui32NumDevices; i++) {
         PVRSRV_DEVICE_IDENTIFIER *di = &out.asDeviceIdentifier[i];

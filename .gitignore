@@ -16,4 +16,5 @@ vertex_shader*
 *.so
 *.swp
 *.swo
-Session.vim
+**/Session.vim
+sync.sh

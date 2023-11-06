@@ -47,6 +47,8 @@
 
 #define DEBUG_SYSCALL(msg) write(-1, (msg), sizeof(msg))
 
+int ioctl(int fd, int request, ...);
+
 enum pvr_heap {
     PVR_HEAP_VERTEX_SHADER,
     PVR_HEAP_PIXEL_SHADER,
@@ -73,13 +75,20 @@ static const char *pvr_heap_names[] = {
     [PVR_HEAP_PERCONTEXT_3DPARAMETERS] = "PerContext3DParameters",
 };
 
+enum mem_type {
+    MEM_TYPE_NORMAL,
+    MEM_TYPE_DISP,
+    MEM_TYPE_MAP,
+};
+
 #define MAX_BUFFERS_TO_TRACK 256
 
 static struct mem_entry {
     bool in_use;
     bool has_mmap[2];
-    bool disp_mem;
-    void *data;
+    enum mem_type type;
+    void *data[2];
+    int prot[2];
     PVRSRV_CLIENT_MEM_INFO mem_info;
     PVRSRV_BRIDGE_OUT_MHANDLE_TO_MMAP_DATA mmap_data[2];
 } mem_trackings[MAX_BUFFERS_TO_TRACK], *last_mem_entry = NULL;
@@ -125,18 +134,28 @@ static enum pvr_heap get_heap(IMG_DEV_VIRTADDR vaddr) {
     }
 }
 
+static bool bincmp32(uint8_t *ptr, uint32_t value) {
+    uint8_t *bytes = &value;
+
+    return /*ptr[0] == bytes[0] &&*/ ptr[1] == bytes[1] && ptr[2] == bytes[2] && ptr[3] == bytes[3];
+}
+
 static void clear_mem(struct mem_entry *mem) {
     enum pvr_heap heap = get_heap(mem->mem_info.sDevVAddr);
     bool valid_heap = heap == PVR_HEAP_VERTEX_SHADER
                       || heap == PVR_HEAP_PIXEL_SHADER
                       || heap == PVR_HEAP_PDS_VERTEX_CODE_DATA
                       || heap == PVR_HEAP_PDS_PIXEL_CODE_DATA
-                      //|| heap == PVR_HEAP_GENERAL
+                      || heap == PVR_HEAP_GENERAL
+                      //|| heap == PVR_HEAP_KERNEL_DATA
+                      || heap == PVR_HEAP_PERCONTEXT_3DPARAMETERS
                       || heap == PVR_HEAP_SYNC_INFO;
     IMG_HANDLE handle = mem->mem_info.hKernelMemInfo;
     bool is_special_heap = handle == 0x14;
-    if(valid_heap || is_special_heap) {
-        memset(mem->data, 0x00, mem->mem_info.uAllocSize);
+    if(mem->type == MEM_TYPE_NORMAL && (valid_heap || is_special_heap)) {
+        for (int i = 0; i < 2; i++)
+            if (mem->data[i])
+                memset(mem->data[i], 0x00, mem->mem_info.uAllocSize);
     }
 
 /* TODO, it might be help to track all writes to the command buffer
@@ -154,19 +173,39 @@ static void clear_mem(struct mem_entry *mem) {
 #endif
 }
 
-static void track_buffer(PVRSRV_CLIENT_MEM_INFO *mem_info, bool disp_mem) {
+static struct mem_entry *add_mmap_pointer(void* data, int prot, size_t length, uintptr_t pgoffset) {
+    int track_arr_size = sizeof(mem_trackings)/sizeof(mem_trackings[0]);
+    for(int i = 0; i < track_arr_size; i++) {
+        struct mem_entry *mem = &mem_trackings[i];
+
+        for (int j = 0; j < 2; j++) {
+            if (mem->in_use && mem->has_mmap[j]) {
+                if (mem->mmap_data[j].uiMMapOffset == pgoffset && mem->mmap_data[j].uiRealByteSize == length) {
+                    mem->data[j] = data;
+                    mem->prot[j] = prot;
+                    return mem;
+                }
+            }
+        }
+    }
+
+    printf("Failed to find matching tracking entry\n");
+    assert(false);
+}
+
+static void track_buffer(PVRSRV_CLIENT_MEM_INFO *mem_info, enum mem_type type) {
     int track_arr_size = sizeof(mem_trackings)/sizeof(mem_trackings[0]);
     for(int i = 0; i < track_arr_size; i++) {
         struct mem_entry *mem = &mem_trackings[i];
         if(!mem->in_use) {
-            memcpy(&mem->mem_info, mem_info, sizeof(*mem_info));
+            mem->mem_info = *mem_info;
             mem->in_use = true;
-            mem->disp_mem = disp_mem;
+            mem->type = type;
 
-            printf("Allocated %x bytes of memory at %p : %x (%s)\n", 
-                   mem_info->uAllocSize, mem_info->pvLinAddr, mem_info->sDevVAddr.uiAddr, 
+            printf("Allocated %x bytes of memory at %p : %x (%s)\n",
+                   mem_info->uAllocSize, mem_info->pvLinAddr, mem_info->sDevVAddr.uiAddr,
                    pvr_heap_names[get_heap(mem_info->sDevVAddr)]);
-            if(disp_mem) {
+            if(type == MEM_TYPE_DISP) {
                 /* Override handle for tracking system */
                 /* TODO this might not be the best approach, modify it causes problems with
                  * disp class memory */
@@ -193,12 +232,12 @@ static void add_mmap_data(int fd, IMG_HANDLE handle, PVRSRV_BRIDGE_OUT_MHANDLE_T
          * this assumption may be wrong */
         bool secondary_handle_valid = mem->mem_info.psNext && (mem->mem_info.hKernelMemInfo+1 == handle);
         if(mem->in_use && !mem->has_mmap[0] && primary_handle_valid) {
-            memcpy(&mem->mmap_data[0], mmap_data, sizeof(*mmap_data));
+            mem->mmap_data[0] = *mmap_data;
             mem->has_mmap[0] = true;
             last_mem_entry = mem;
             return;
         } else if(mem->in_use && !mem->has_mmap[1] && secondary_handle_valid) {
-            memcpy(&mem->mmap_data[1], mmap_data, sizeof(*mmap_data));
+            mem->mmap_data[1] = *mmap_data;
             mem->has_mmap[1] = true;
             last_mem_entry = mem;
             return;
@@ -209,6 +248,7 @@ static void add_mmap_data(int fd, IMG_HANDLE handle, PVRSRV_BRIDGE_OUT_MHANDLE_T
     assert(false);
 }
 
+#if 0
 static void add_mmap_addr(IMG_HANDLE handle, void *data) {
     int track_arr_size = sizeof(mem_trackings)/sizeof(mem_trackings[0]);
     for(int i = 0; i < track_arr_size; i++) {
@@ -222,8 +262,20 @@ static void add_mmap_addr(IMG_HANDLE handle, void *data) {
     printf("Could not find mem with handle %p\n", handle);
     assert(false);
 }
+#endif
 
 static char str_buf[4096];
+
+static void dump_buffer(struct mem_entry *mem, int buf_index, const char *name) {
+    FILE *fp = fopen(name, "wb");
+    if(!fp) {
+        printf("Failed to open buffer file %s", name);
+        assert(false);
+    }
+    fwrite(mem->data[buf_index], 1, mem->mem_info.uAllocSize, fp);
+    fclose(fp);
+}
+
 static void dump_tracked_buffers() {
     struct stat st = {0};
     if(stat("buffers", &st) == -1) {
@@ -232,35 +284,227 @@ static void dump_tracked_buffers() {
     int track_arr_size = sizeof(mem_trackings)/sizeof(mem_trackings[0]);
     for(int i = 0; i < track_arr_size; i++) {
         struct mem_entry *mem = &mem_trackings[i];
-        if(mem->in_use && mem->data) {
-            sprintf(str_buf, "buffers/0x%x_%s.bin", (uintptr_t)mem->mem_info.hKernelMemInfo, 
-                    pvr_heap_names[get_heap(mem->mem_info.sDevVAddr)]); 
-            FILE *fp = fopen(str_buf, "wb");
-            if(!fp) {
-                printf("Failed to open buffer file %s", str_buf);
-                assert(false);
+        for (int j = 0; j < 2; j++) {
+            if(mem->in_use && mem->data[j]) {
+                sprintf(str_buf, "buffers/0x%x_%s.bin", (uintptr_t)mem->mem_info.hKernelMemInfo + j,
+                        pvr_heap_names[get_heap(mem->mem_info.sDevVAddr)]);
+                dump_buffer(mem, j, str_buf);
             }
-            fwrite(mem->data, 1, mem->mem_info.uAllocSize, fp);
-            fclose(fp);
         }
     }
 }
+
+static struct mem_entry *get_buffer(IMG_HANDLE mem_handle) {
+    int track_arr_size = sizeof(mem_trackings)/sizeof(mem_trackings[0]);
+    for(int i = 0; i < track_arr_size; i++) {
+        struct mem_entry *mem = &mem_trackings[i];
+        //for (int j = 0; j < 2; j++) {
+            if (mem->in_use && (mem->mem_info.hKernelMemInfo) == mem_handle) {
+                return mem;
+            }
+        //}
+    }
+    return NULL;
+}
+
+static void create_buffer(int fd, PVRSRV_BRIDGE_PACKAGE *in_bridge, IMG_HANDLE cookie, int heap, int size, int attrib)
+{
+    PROLOG(ioctl);
+    PVRSRV_BRIDGE_IN_ALLOCDEVICEMEM in_alloc = {
+        //.ui32BridgeFlags = 0xffffffff,
+        .hDevCookie = cookie,
+        .hDevMemHeap = heap,
+        .ui32Attribs = attrib,
+        .uSize = size,
+        .uAlignment = 64,
+    };
+
+    PVRSRV_BRIDGE_OUT_ALLOCDEVICEMEM out_alloc = {0};
+
+    PVRSRV_BRIDGE_PACKAGE alloc = {
+        .ui32BridgeID = PVRSRV_BRIDGE_ALLOC_DEVICEMEM,
+        .ui32Size = sizeof(alloc),
+        .pvParamIn = &in_alloc,
+        .ui32InBufferSize = sizeof(in_alloc),
+        .pvParamOut = &out_alloc,
+        .ui32OutBufferSize = sizeof(out_alloc),
+        .hKernelServices = in_bridge->hKernelServices
+    };
+
+    long ret = orig_ioctl(fd, DRM_IOCTL_PVR_SRVKM, &alloc);
+
+    if (ret != 0 || out_alloc.eError != PVRSRV_OK) {
+        printf("Failed to alloc patch buffer\n");
+    } else {
+        printf("Created alloc buffer\n");
+    }
+}
+
+static IMG_HANDLE new_magic_handle = NULL;
+static PVRSRV_CLIENT_MEM_INFO new_magic_mem;
+static IMG_HANDLE create_patchable_buffer(int fd, PVRSRV_BRIDGE_PACKAGE *in_bridge, IMG_HANDLE cookie) {
+    PROLOG(ioctl);
+    PROLOG(syscall);
+    PVRSRV_BRIDGE_IN_ALLOCDEVICEMEM in_alloc = {
+        //.ui32BridgeFlags = 0xffffffff,
+        .hDevCookie = cookie,
+        .hDevMemHeap = 0x9,
+        .ui32Attribs = 0x9,
+        .uSize = 524288,
+        .uAlignment = 64,
+    };
+
+    PVRSRV_BRIDGE_OUT_ALLOCDEVICEMEM out_alloc = {0};
+
+    PVRSRV_BRIDGE_PACKAGE alloc = {
+        .ui32BridgeID = PVRSRV_BRIDGE_ALLOC_DEVICEMEM,
+        .ui32Size = sizeof(alloc),
+        .pvParamIn = &in_alloc,
+        .ui32InBufferSize = sizeof(in_alloc),
+        .pvParamOut = &out_alloc,
+        .ui32OutBufferSize = sizeof(out_alloc),
+        .hKernelServices = in_bridge->hKernelServices
+    };
+
+    long ret = orig_ioctl(fd, DRM_IOCTL_PVR_SRVKM, &alloc);
+
+    if (ret != 0 || out_alloc.eError != PVRSRV_OK) {
+        printf("Failed to alloc patch buffer\n");
+    } else {
+        printf("Created alloc buffer\n");
+    }
+
+    PVRSRV_BRIDGE_IN_MHANDLE_TO_MMAP_DATA in_to_mmap = {
+        //.ui32BridgeFlags = 0xffffffff,
+        .hMHandle = out_alloc.sClientMemInfo.hKernelMemInfo,
+    };
+
+    PVRSRV_BRIDGE_OUT_MHANDLE_TO_MMAP_DATA out_to_mmap = {0};
+
+    PVRSRV_BRIDGE_PACKAGE to_mmap = {
+        .ui32BridgeID = PVRSRV_BRIDGE_MHANDLE_TO_MMAP_DATA,
+        .ui32Size = sizeof(to_mmap),
+        .pvParamIn = &in_to_mmap,
+        .ui32InBufferSize = sizeof(in_to_mmap),
+        .pvParamOut = &out_to_mmap,
+        .ui32OutBufferSize = sizeof(out_to_mmap),
+        .hKernelServices = in_bridge->hKernelServices
+    };
+
+    ret = orig_ioctl(fd, DRM_IOCTL_PVR_SRVKM, &to_mmap);
+
+    if (ret != 0 || out_alloc.eError != PVRSRV_OK) {
+        printf("Failed to mmap data patch buffer\n");
+    } else {
+        printf("Got mmap data\n");
+    }
+
+
+    ret = orig_syscall(SYS_mmap2, 0, out_to_mmap.uiRealByteSize, 3, 1, fd, out_to_mmap.uiMMapOffset);
+
+    if (ret == MAP_FAILED) {
+        printf("Failed to mmap patch buffer\n");
+    } else {
+        printf("Mapped patch buffer\n");
+    }
+    uint8_t *addr = (uint8_t*)ret;
+    new_magic_mem = out_alloc.sClientMemInfo;
+
+#if 1
+    FILE *fp = fopen("./buffers_red/0x73_PDSPixelCodeData.bin", "rb");
+    fread(addr, 1, 524288, fp);
+    fclose(fp);
+#endif
+
+#if 1
+    for (size_t i = 0; i < 524288; i += 4) {
+        uint32_t *data = ((uint8_t*)addr) + i;
+        if ((*data & 0xffffff00) == 0x0dc13000) {
+            //printf("Memory %p is patched at 0x%x\n", mem->mem_info.hKernelMemInfo, i);
+            *data = ((uint32_t)new_magic_mem.sDevVAddr.uiAddr) | (*data & 0xff);
+            //cacheflush(mem->data, mem->mem_info.uAllocSize, DCACHE);
+        }
+
+    }
+#endif
+
+    munmap(addr, out_to_mmap.uiRealByteSize);
+
+    printf("Created patchable buffer %d %d\n", out_alloc.eError, out_to_mmap.eError);
+
+
+    return out_alloc.sClientMemInfo.hKernelMemInfo;
+}
+
+#include <sys/cachectl.h>
 
 static void patch_buffers() {
     int track_arr_size = sizeof(mem_trackings)/sizeof(mem_trackings[0]);
     for(int i = 0; i < track_arr_size; i++) {
         struct mem_entry *mem = &mem_trackings[i];
 #if 0
+        if (mem->in_use && mem->mem_info.hKernelMemInfo == 0x73) {
+            //memset(mem->data[0], 0x00, mem->mem_info.uAllocSize);
+            uint32_t *magic_ptr = mem->data[0] + 0xc0;
+            //*magic_ptr = 0x0;
+            //*magic_ptr = new_magic_mem.sDevVAddr.uiAddr | 0xa0;
+            *magic_ptr = 0xdeadbeef;
+        }
+#endif
+#if 0
         if(mem->in_use && mem->mem_info.hKernelMemInfo == 0x73) {
             float *clear_color = ((uint8_t*)mem->data) + 0xac;
             clear_color[0] = 1.0f;
             clear_color[1] = 0.5f;
-        } 
+        }
 #endif
 #if 0
         else if(mem->in_use && mem->mem_info.hKernelMemInfo == 0x14) {
             uint32_t *cmds = ((uint8_t*)mem->data) + 0x00;
             cmds[0]= 0xDEADBEEF;
+        }
+#endif
+        if(mem->in_use && mem->data[0] && mem->mem_info.hKernelMemInfo == 0x71) {
+            printf("Patched buffer\n");
+            uint8_t *data = ((uint8_t*)mem->data[0]) + 0x142;
+            uint32_t important_bits = (new_magic_mem.sDevVAddr.uiAddr & 0x00FFF000) >> 12;
+            uint8_t *ptr_bits = &important_bits;
+            data[2] = ptr_bits[1];
+            data[3] = ptr_bits[0];
+            uint32_t *data32 = (uint32_t*)data;
+            printf("Patched data is 0x%x real addr is 0x%x\n", *data32, new_magic_mem.sDevVAddr.uiAddr);
+        }
+#if 0
+        int count = 0;
+        if(mem->in_use && mem->data && (mem->prot & PROT_WRITE) && !mem->disp_mem/*mem->mem_info.hKernelMemInfo == 0x25*/) {
+            //if (mem->mem_info.hKernelMemInfo == 0x73)
+            //    continue;
+            for (size_t i = 0; i < mem->mem_info.uAllocSize; i += 4) {
+                uint32_t *data = ((uint8_t*)mem->data) + i;
+                if ((*data & 0xffffff00) == 0x0dc13000) {
+                    //if (count == 0)
+                    {
+                        printf("Memory %p is patched at 0x%x\n", mem->mem_info.hKernelMemInfo, i);
+                        *data = ((uint32_t)new_magic_mem.sDevVAddr.uiAddr) | (*data & 0xff);
+                    }
+                    //count += 1;
+                }
+            }
+        }
+#endif
+
+#if 0
+        for (int j = 0; j < 2; j++) {
+            if(mem->in_use && !mem->disp_mem && mem->data[j]) {
+                for (size_t k = 0; k < mem->mem_info.uAllocSize; k += 2) {
+                    uint16_t *data = ((uint8_t*)mem->data[j]) + k;
+                    if ((*data) == 0x0130) {
+                        printf("Memory %p is patched at 0x%x\n", mem->mem_info.hKernelMemInfo+j, k);
+                        *data = (new_magic_mem.sDevVAddr.uiAddr - SGX_PDSPIXEL_CODEDATA_HEAP_BASE) >> 8;
+                    }
+
+                }
+            }
         }
 #endif
     }
@@ -291,13 +535,21 @@ static void pvrsrv_ioctl_post(int fd, PVRSRV_BRIDGE_PACKAGE *bridge_package, int
             PPRINT(stdout, bridge_package->pvParamOut, PVRSRV_BRIDGE_OUT_ENUMDEVICE);
             break;
         case _IOC_NR(PVRSRV_BRIDGE_ACQUIRE_DEVICEINFO):
-            PPRINT(stdout, bridge_package->pvParamOut, PVRSRV_BRIDGE_OUT_ACQUIRE_DEVICEINFO);  
+            PPRINT(stdout, bridge_package->pvParamOut, PVRSRV_BRIDGE_OUT_ACQUIRE_DEVICEINFO);
             break;
+        case _IOC_NR(PVRSRV_BRIDGE_SGX_REGISTER_HW_RENDER_CONTEXT):
+            /* TODO figure out if we can find cmd submits from this */
+            {
+                PVRSRV_BRIDGE_OUT_SGX_REGISTER_HW_RENDER_CONTEXT *data = bridge_package->pvParamOut;
+                printf("HW Render Context handle %p\n", data->hHWRenderContext);
+                printf("HW Render Context %p\n", data);
+                break;
+            }
         case _IOC_NR(PVRSRV_BRIDGE_ALLOC_DEVICEMEM):
             {
                 PVRSRV_BRIDGE_OUT_ALLOCDEVICEMEM *mem_data = bridge_package->pvParamOut;
                 PVRSRV_CLIENT_MEM_INFO *mem = &mem_data->sClientMemInfo;
-                track_buffer(mem, false);
+                track_buffer(mem, MEM_TYPE_NORMAL);
                 printf("Alloc %p\n", mem->hKernelMemInfo);
             }
             break;
@@ -306,26 +558,66 @@ static void pvrsrv_ioctl_post(int fd, PVRSRV_BRIDGE_PACKAGE *bridge_package, int
                 PVRSRV_BRIDGE_IN_MHANDLE_TO_MMAP_DATA *in_data = bridge_package->pvParamIn;
                 PVRSRV_BRIDGE_OUT_MHANDLE_TO_MMAP_DATA *out_data = bridge_package->pvParamOut;
                 add_mmap_data(fd, in_data->hMHandle, out_data);
+                printf("MHANDLE to MMAP data %p\n", in_data->hMHandle);
             }
             break;
         case _IOC_NR(PVRSRV_BRIDGE_MAP_DEVICECLASS_MEMORY):
             {
                 PVRSRV_BRIDGE_OUT_MAP_DEVICECLASS_MEMORY *out_data = bridge_package->pvParamOut;
-                track_buffer(&out_data->sClientMemInfo, true);
+                track_buffer(&out_data->sClientMemInfo, MEM_TYPE_DISP);
                 printf("Disp class %p\n", out_data->sClientMemInfo.hMappingInfo);
             }
             break;
-        case _IOC_NR(PVRSRV_BRIDGE_MAP_DEV_MEMORY): 
+        case _IOC_NR(PVRSRV_BRIDGE_MAP_DEV_MEMORY):
             {
+                PVRSRV_BRIDGE_IN_MAP_DEV_MEMORY *in = bridge_package->pvParamIn;
                 PVRSRV_BRIDGE_OUT_MAP_DEV_MEMORY *out_data = bridge_package->pvParamOut;
-                track_buffer(&out_data->sDstClientMemInfo, false);
+                track_buffer(&out_data->sDstClientMemInfo, MEM_TYPE_MAP);
                 printf("Map dev mem %p\n", out_data->sDstClientMemInfo.hKernelMemInfo);
+                printf("Mapping %p %p\n", in->hKernelMemInfo, in->hDstDevMemHeap);
+            }
+            break;
+        case _IOC_NR(PVRSRV_BRIDGE_CREATE_DEVMEMCONTEXT):
+            {
+                PVRSRV_BRIDGE_OUT_CREATE_DEVMEMCONTEXT *out = bridge_package->pvParamOut;
+                printf("Devmem context %p\n", out);
+                //PPRINT(stdout, bridge_package->pvParamIn, PVRSRV_BRIDGE_IN_CREATE_DEVMEMCONTEXT);
+                //fwrite(bridge_package->pvParamIn, 1, sizeof(PVRSRV_BRIDGE_IN_CREATE_DEVMEMCONTEXT), log_file);
+            }
+            break;
+
+        case _IOC_NR(PVRSRV_BRIDGE_GET_MISC_INFO):
+            {
+                PVRSRV_BRIDGE_IN_GET_MISC_INFO *in = bridge_package->pvParamIn;
+                printf("Getting misc info %u\n", in->sMiscInfo.ui32StateRequest);
+            }
+            break;
+        case _IOC_NR(PVRSRV_BRIDGE_SGX_GETMISCINFO):
+            {
+                PVRSRV_BRIDGE_IN_SGXGETMISCINFO *in = bridge_package->pvParamIn;
+                printf("Getting SGX misc info %u\n", in->psMiscInfo->eRequest);
+            }
+            break;
+        case _IOC_NR(PVRSRV_BRIDGE_SGX_DOKICK):
+            /* This is the command to kick off command execution */
+            {
+                PVRSRV_BRIDGE_IN_DOKICK *ccb = bridge_package->pvParamIn;
+
+                printf("CCB offset 0x%x\n", ccb->sCCBKick.ui32CCBOffset);
+                printf("Cookie %p\n", ccb->hDevCookie);
+                printf("Dev Mem Context %p\n", ccb->sCCBKick.hDevMemContext);
+                printf("Kernel mem handle %p\n", ccb->sCCBKick.hCCBKernelMemInfo);
+                struct mem_entry *cmd_buf = get_buffer(ccb->sCCBKick.hCCBKernelMemInfo);
+                printf("Dumping %p as ccb buffer\n", cmd_buf->mem_info.hKernelMemInfo);
+                dump_buffer(cmd_buf, 0, "./cmd.bin");
+                SGXMKIF_CMDTA_SHARED *ccb_data = (cmd_buf->data[0] + ccb->sCCBKick.ui32CCBOffset);
+                printf("CCB data %p\n", ccb_data);
             }
             break;
     }
 }
 
-static bool pvrsrv_ioctl(PVRSRV_BRIDGE_PACKAGE *bridge_package) {
+static bool pvrsrv_ioctl(int fd, PVRSRV_BRIDGE_PACKAGE *bridge_package) {
     int ioctl_nr = _IOC_NR(bridge_package->ui32BridgeID);
     printf(">>> pvr_ioctl(%s)\n", pvrsrv_ioctl_names[ioctl_nr]);
     switch(ioctl_nr) {
@@ -333,11 +625,28 @@ static bool pvrsrv_ioctl(PVRSRV_BRIDGE_PACKAGE *bridge_package) {
             /* TODO track memory */
             break;
         case _IOC_NR(PVRSRV_BRIDGE_ALLOC_DEVICEMEM):
-            /* TODO track memory */
+            {
+                PVRSRV_BRIDGE_IN_ALLOCDEVICEMEM *mem_data = bridge_package->pvParamIn;
+#if 0
+                if (mem_data->hDevMemHeap == 0x9 && mem_data->uSize == 524288) {
+                    create_buffer(fd, bridge_package, mem_data->hDevCookie, 0x9, 524288, 0x9);
+                    printf("Created buffer to offset\n");
+                }
+#endif
+                printf("Alloc %p\n", mem_data);
+            }
             break;
         case _IOC_NR(PVRSRV_BRIDGE_SGX_REGISTER_HW_RENDER_CONTEXT):
             /* TODO figure out if we can find cmd submits from this */
-            break;
+            {
+                PVRSRV_BRIDGE_IN_SGX_REGISTER_HW_RENDER_CONTEXT *data = bridge_package->pvParamIn;
+                printf("HW Render Context %p\n", data);
+                for (IMG_UINT32 i = 0; i < data->ui32HWRenderContextSize; i += sizeof(IMG_UINT32)) {
+                    IMG_UINT32 *t = (IMG_UINT32*)&data->pHWRenderContextCpuVAddr[i];
+                    printf("\tvalue is 0x%x\n", *t);
+                }
+                break;
+            }
         case _IOC_NR(PVRSRV_BRIDGE_SGX_REGISTER_HW_TRANSFER_CONTEXT):
             /* TODO figure out if we can find cmd submits from this */
             break;
@@ -370,15 +679,18 @@ static bool pvrsrv_ioctl(PVRSRV_BRIDGE_PACKAGE *bridge_package) {
                         num_buffers += 1;
                     }
                 }
-                printf("Tracking %d buffers\n", num_buffers); 
+                PVRSRV_BRIDGE_IN_DOKICK *ccb = bridge_package->pvParamIn;
+                printf("Tracking %d buffers\n", num_buffers);
+                new_magic_handle = create_patchable_buffer(fd, bridge_package, ccb->hDevCookie);
                 dump_tracked_buffers();
                 patch_buffers();
-                
-                PVRSRV_BRIDGE_IN_DOKICK *ccb = bridge_package->pvParamIn; 
+
                 printf("CCB offset 0x%x\n", ccb->sCCBKick.ui32CCBOffset);
                 printf("Cookie %p\n", ccb->hDevCookie);
                 printf("Dev Mem Context %p\n", ccb->sCCBKick.hDevMemContext);
                 printf("Kernel mem handle %p\n", ccb->sCCBKick.hCCBKernelMemInfo);
+                //SGXMKIF_CMDTA_SHARED *ccb_data = get_buffer(ccb->sCCBKick.hCCBKernelMemInfo);
+                //printf("CCB data %p\n", ccb_data);
             }
             break;
         case _IOC_NR(PVRSRV_BRIDGE_SGX_SET_RENDER_CONTEXT_PRIORITY):
@@ -461,10 +773,10 @@ static bool pvr_ioctl_pre(int fd, int request, void *ptr) {
                                         data->drm_dd_minor);
             }
             break;
-        case PVR_DRM_SRVKM_CMD: 
+        case PVR_DRM_SRVKM_CMD:
             //fwrite(ptr, 1, sizeof(PVRSRV_BRIDGE_PACKAGE), log_file);
             //PPRINT(stdout, ptr, PVRSRV_BRIDGE_PACKAGE);
-            return pvrsrv_ioctl(ptr);
+            return pvrsrv_ioctl(fd, ptr);
             break;
         case PVR_DRM_IS_MASTER_CMD:
             printf(">>> ioctl(PVR_DRM_IS_MASTER_CMD)\n");
@@ -561,11 +873,7 @@ long syscall(long number, ...) {
         unsigned long pgoffset = va_arg(args, unsigned long);
         long ret = orig_syscall(number, addr, length, prot, flags, fd, pgoffset);
         printf("mmap2 called with 0x%lx\n", ret);
-        if(!last_mem_entry) {
-            printf("last memory entry is null!\n");
-            assert(false);
-        }
-        last_mem_entry->data = (void*)(uintptr_t)ret;
+        last_mem_entry = add_mmap_pointer(ret, prot, length, pgoffset);
         clear_mem(last_mem_entry);
         return ret;
     } else {
@@ -575,6 +883,24 @@ long syscall(long number, ...) {
     assert(false);
     return 0;
 }
+
+
+
+#if 0
+void * memcpy ( void * destination, const void * source, size_t num ) {
+    PROLOG(memcpy);
+
+    for(size_t i = 0; i < num; i += 1) {
+        uint32_t *data = ((uint8_t*)source) + i;
+        //if ((*data & 0xffffff00) == 0x0dc13000) {
+        if (bincmp32(data, 0x0dc13000)) {
+            printf("Found pointer at %p\n", data);
+        }
+    }
+
+    return orig_memcpy(destination, source, num);
+}
+#endif
 
 #if 0
 drmVersionPtr drmGetVersion(int fd) {
@@ -601,7 +927,7 @@ int PVRSRVAllocDeviceMem(void* data, void* handle, uint32_t attribs, uint32_t si
 
     printf("allocated %x bytes of memory at %p : %x (%s)\n", size, (*info)->pvLinAddr, (*info)->sDevVAddr.uiAddr,
     pvr_heap_names[get_heap((*info)->sDevVAddr)]);
-    printf("Heap handle %p\n", handle); 
+    printf("Heap handle %p\n", handle);
 
     /* Clear memory so comparing dumps will be more consistent */
     memset((*info)->pvLinAddr, 0, size);

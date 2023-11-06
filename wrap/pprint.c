@@ -243,12 +243,12 @@ static const char *pprint_PVRSRV_ERROR(FILE *fp, PVRSRV_ERROR data) {
         PPRINT_CASE(PVRSRV_ERROR_CACHEOP_FAILED);
 
         PPRINT_CASE(PVRSRV_ERROR_CACHE_INVALIDATE_FAILED);
-        
+
         PPRINT_CASE(PVRSRV_ERROR_FORCE_I32);
          default:
             printf("Got value %d\n", data);
             assert(false && "Reached end of case\n");
-            return NULL;           
+            return NULL;
     }
 }
 
@@ -318,7 +318,7 @@ static void pprint_PVRSRV_BRIDGE_IN_CONNECT_SERVICES(FILE *fp, PVRSRV_BRIDGE_IN_
 
 static void pprint_PVRSRV_BRIDGE_IN_ACQUIRE_DEVICEINFO(FILE *fp, PVRSRV_BRIDGE_IN_ACQUIRE_DEVICEINFO *data) {
     fprintf(fp, "{\n.ui32BridgeFlags = 0x%x,\n.uiDevIndex = 0x%x,\n.eDeviceType = %s,\n}",
-                data->ui32BridgeFlags, data->uiDevIndex, PPRINT(fp, data->eDeviceType, PVRSRV_DEVICE_TYPE)); 
+                data->ui32BridgeFlags, data->uiDevIndex, PPRINT(fp, data->eDeviceType, PVRSRV_DEVICE_TYPE));
 }
 
 static void pprint_PVRSRV_BRIDGE_IN_SGXGETMISCINFO(FILE *fp, PVRSRV_BRIDGE_IN_SGXGETMISCINFO *data) {
@@ -381,3 +381,25 @@ static void pprint_PVRSRV_BRIDGE_OUT_CREATE_DEVMEMCONTEXT(FILE *fp, PVRSRV_BRIDG
     }
     fprintf(fp, "}");
 }
+
+#if 0
+static void pprint_SGX_CCB_KICK(FILE *fp, SGX_CCB_KICK *data) {
+    fprintf(fp, "{\n.sCommand =");
+    PPRINT(fp, &data->sCommand, SGXMKIF_COMMAND);
+    fprintf(fp, ",\n.hCCBKernelMemInfo = %p,\n.ui32NumDstSyncObjects = 0x%x,\n.hKernelHWSyncListMemInfo = %p,"
+                "\n.pahDstSyncHandles = %p,\n.ui32NumTAStatusVals = 0x%x,\n.ui32Num3DStatusVals = 0x%x,"
+                "\n.asTAStatusUpdate = ", data->hCCBKernelMemInfo, data->ui32NumDstSyncObjects,
+                data->hKernelHWSyncListMemInfo, data->pahDstSyncHandles, data->ui32NumTAStatusVals,
+                data->ui32Num3DStatusVals);
+    //PPRINT(fp, data->asTAStatusUpdate, SGX_INTERNEL_STATUS_UPDATE);
+    fprintf(fp, "TODO,\n.as3DStatusUpdate = TODO,");
+    fprintf(fp, "\n.bFirstKickOrResume = %d,\n.bLastInScene = %d,\n.ui32CCBOffset
+}
+
+static void pprint_PVRSRV_BRIDGE_IN_DOKICK(FILE *fp, PVRSRV_BRIDGE_IN_DOKICK *data) {
+    fprintf(fp, "{\n.ui32BridgeFlags = 0x%x,\n.hDevCookie = %p,\n.sCCBKick = ",
+                data->ui32BridgeFlags, data->hDevCookie);
+    PPRINT(fp, &data->sCCBKick, SGX_CCB_KICK);
+    fprintf(fp, "}");
+}
+#endif
